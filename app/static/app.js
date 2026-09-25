@@ -173,9 +173,11 @@ async function loadInstruments() {
   renderDashboard();
 }
 
-async function loadWatchlists() {
+/* quiet = live refresh: keep the current content until new data arrives
+ * (no "Loading…" flicker every few seconds) */
+async function loadWatchlists({quiet = false} = {}) {
   if (state.userId === null) return;
-  loading($("watchlists"));
+  if (!quiet) loading($("watchlists"));
   try {
     state.watchlists = await api(`/users/${state.userId}/watchlists`);
     renderWatchlists();
@@ -199,9 +201,9 @@ async function loadRules() {
   renderDashboard();
 }
 
-async function loadAlerts() {
+async function loadAlerts({quiet = false} = {}) {
   if (state.userId === null) return;
-  loading($("alerts"));
+  if (!quiet) loading($("alerts"));
   try {
     state.alerts = await api(`/users/${state.userId}/alerts?limit=${ALERT_LIMIT}`);
     state.filteredAlerts = state.alertFilter
@@ -220,6 +222,46 @@ const USER_PANELS = ["watchlists", "rules", "alerts", "dashboard-alerts", "dashb
 
 function loadUserData() {
   return Promise.all([loadWatchlists(), loadRules(), loadAlerts()]);
+}
+
+/* ======================================================================
+ * Live refresh (optional, default OFF): re-reads the API every few
+ * seconds while the live feed or a replay is writing ticks. It is plain
+ * polling of the same endpoints as Refresh, not a push channel.
+ * ====================================================================== */
+const LIVE_INTERVAL_MS = 5000;
+let liveTimer = null;
+let liveBusy = false;
+
+function setLiveRefresh(on) {
+  clearInterval(liveTimer);
+  liveTimer = on ? setInterval(liveTick, LIVE_INTERVAL_MS) : null;
+  const button = $("live-toggle");
+  button.textContent = on ? "Live refresh: ON" : "Live refresh: OFF";
+  button.setAttribute("aria-pressed", on ? "true" : "false");
+  button.classList.toggle("on", on);
+  if (on) liveTick();
+}
+
+async function liveTick() {
+  if (liveBusy || document.hidden || state.userId === null) return;   // no overlap; paused in background tabs
+  const focused = document.activeElement;
+  if (focused && focused.closest("main") && ["INPUT", "SELECT", "TEXTAREA"].includes(focused.tagName)) {
+    return;                        // the user is filling in a form: don't redraw it under them
+  }
+  liveBusy = true;
+  try {
+    await loadHealth();
+    if ($("health").classList.contains("health-bad")) {
+      setLiveRefresh(false);
+      flash("Live refresh switched off: " + $("health").textContent + ".", "error");
+      return;
+    }
+    await Promise.all([loadWatchlists({quiet: true}), loadAlerts({quiet: true}),
+      state.detailId ? loadInstrumentDetail(state.detailId, {quiet: true}) : null]);
+  } finally {
+    liveBusy = false;
+  }
 }
 
 function showNoUser() {
@@ -322,7 +364,7 @@ async function fetchLatest(instrumentId) {
   }
 }
 
-async function loadInstrumentDetail(instrumentId) {
+async function loadInstrumentDetail(instrumentId, {quiet = false} = {}) {
   const box = $("instrument-detail");
   const inst = instrumentById(instrumentId);
   box.hidden = false;
@@ -331,18 +373,23 @@ async function loadInstrumentDetail(instrumentId) {
     h("button", {type: "button", className: "button small", onclick: () => {
       state.detailId = null; box.hidden = true; renderInstruments(); }}, "Close"));
   const body = h("div", {});
-  box.replaceChildren(heading, body);
-  loading(body);
+  if (!quiet) {
+    box.replaceChildren(heading, body);
+    loading(body);
+  }
   let latest, history;
   try {
     [latest, history] = await Promise.all([
       fetchLatest(instrumentId),
       api(`/instruments/${instrumentId}/history?limit=${state.historyLimit}`)]);
   } catch (err) {
+    if (state.detailId !== instrumentId) return;
+    box.replaceChildren(heading, body);
     failed(body, err);
     return;
   }
   if (state.detailId !== instrumentId) return;           // user opened another one meanwhile
+  box.replaceChildren(heading, body);
   if (latest === null) {
     empty(body, "No price data yet");
     body.append(h("p", {className: "muted"},
@@ -733,6 +780,7 @@ function wireEvents() {
   }
   window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
   $("refresh-button").addEventListener("click", refreshAll);
+  $("live-toggle").addEventListener("click", () => setLiveRefresh(liveTimer === null));
   $("user-select").addEventListener("change", (e) => {
     state.userId = Number(e.target.value);
     state.lastTick = null;

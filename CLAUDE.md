@@ -172,6 +172,15 @@ Indexes:
 - Web UI: same uvicorn → http://127.0.0.1:8000/ (app/static: index.html,
   styles.css, api.js, app.js; no framework/npm/CDN); notes docs/FRONTEND.md;
   tests `python -m unittest tests.test_frontend -v`
+- Live feed (optional, needs internet): `python -m app.live_feed --symbols ETHUSDT
+  --max-events 20` (separate process; Binance public aggTrade via
+  wss://data-stream.binance.vision; every event → ingest_tick 'BINANCE';
+  source_event_id 'aggTrade:<a>'; observed_at = trade time T). Notes
+  docs/LIVE_FEED.md; tests `python -m unittest tests.test_live_feed -v`
+  (no internet). Read-only inspector: sql/08_inspect_live.sql.
+- Clean reset: `psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql
+  -f sql/01_seed.sql -f sql/03_functions_triggers.sql -f sql/06_indexes.sql`
+  → 3/7/5/11 users/instruments/watchlists/items, 6 rules, 0 ticks, 0 events
 
 ## Working rules
 

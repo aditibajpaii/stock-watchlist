@@ -33,7 +33,7 @@ uvicorn app.main:app --reload
 | app/static/index.html | the page: header (title, demo user selector, Refresh, health badge), side navigation, one `<section>` per view, the fixed forms |
 | app/static/styles.css | colours as CSS variables, layout, cards, tables, badges, loading/empty/error styles, two breakpoints (1000 px, 760 px) |
 | app/static/api.js | `api()`, the only `fetch()`; `ApiError`; `h()` DOM builder; `formatDecimal`, `checkDecimal`, `formatTime` |
-| app/static/app.js | state object, loaders, one render function per view, form handlers, start-up |
+| app/static/app.js | state object, loaders, one render function per view, form handlers, optional live refresh, start-up |
 
 - No npm, no build step, no framework, no CDN, no web fonts (system font
   stack).
@@ -82,14 +82,18 @@ Every endpoint the UI uses already existed in Phase 7. None was added.
 | Loading/empty/error | each loader writes "Loading…", then content, an empty state ("No watchlists yet", "No alerts yet", "No price data yet", …) or a red error, never leaving "Loading…" behind. |
 | "No ticks" | the 404 "Instrument has no price ticks yet." is shown as "No price data yet", not as an error. |
 | Health | header badge: "API + database connected" (200), "Database unavailable" (503), "Server unreachable" (no response). |
-| Refresh | the button reloads health, instruments, the user's watchlists, rules and alerts, and the open instrument panel. There is no polling. |
+| Refresh | the button reloads health, instruments, the user's watchlists, rules and alerts, and the open instrument panel. |
+| Live refresh (Phase 9) | header button, **OFF by default**. When ON, every 5 s (`LIVE_INTERVAL_MS`) it re-reads `/health`, watchlists, alerts and the open instrument panel "quietly" (old content stays until new data arrives). A refresh is skipped while the previous one is still running, while the tab is hidden, or while a form field in the page has focus. OFF clears the timer. It switches itself off with a message if the server or database becomes unavailable. This is polling of the normal endpoints, not SSE/WebSocket. |
 | Accessibility | a `<label for>` on every control (test 09); real `<button>`s; tables with `<th scope="col">`; `aria-current` on the active nav item; `aria-live` message area; confirm() before every delete; visible focus outline. |
 | Layout | sidebar layout on desktop; below 760 px the nav becomes a top bar. Wide tables scroll inside their card, never the whole page. |
 
 ## 6. Limitations
 
-- No live updates: new ticks and alerts appear on Refresh or after your
-  own action (SSE is a later phase).
+- No server push: new ticks and alerts appear on Refresh, after your own
+  action, or within 5 s when "Live refresh" is ON (polling).
+- The Source column/field shows what the API returns (BINANCE / REPLAY /
+  MANUAL). There is no "LIVE" badge; only BINANCE instruments can have
+  live data (docs/LIVE_FEED.md).
 - No login. The demo user selector only chooses whose rows to show.
 - Alert list capped at 50; history at 50 or 100 ticks; no paging.
 - The exchange filter lists BSE, but the seed data has no BSE

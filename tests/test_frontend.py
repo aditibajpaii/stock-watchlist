@@ -186,7 +186,7 @@ class FrontendTests(unittest.TestCase):
         page = parse_index()
         for view in ("dashboard", "watchlists", "rules", "alerts", "instruments", "demo"):
             self.assertIn("view-" + view, page.ids)
-        for element in ("user-select", "refresh-button", "health", "flash",
+        for element in ("user-select", "refresh-button", "live-toggle", "health", "flash",
                         "watchlist-form", "rule-form", "tick-form", "alerts-filter",
                         "instrument-search", "instrument-exchange", "instrument-detail",
                         "stat-watchlists", "stat-rules", "stat-alerts", "stat-instruments"):
@@ -248,6 +248,19 @@ class FrontendTests(unittest.TestCase):
             text = read(name)
             with self.subTest(file=name):
                 self.assertNotRegex(text, r"\.innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\(|new Function")
+
+
+    # Phase 9 -------------------------------------------------------
+    def test_14_live_refresh_is_off_by_default_and_bounded(self):
+        page = read("index.html")
+        self.assertRegex(page, r'id="live-toggle"[^>]*aria-pressed="false"[^>]*>Live refresh: OFF<')
+        js = re.sub(r"/\*.*?\*/|//[^\n]*", "", read("app.js"), flags=re.S)
+        self.assertEqual(len(re.findall(r"\bsetInterval\(", js)), 1)       # one timer only
+        self.assertIn("clearInterval(liveTimer)", js)                      # switched off = timer cleared
+        interval = int(re.search(r"LIVE_INTERVAL_MS\s*=\s*(\d+)", js).group(1))
+        self.assertGreaterEqual(interval, 3000)                            # not faster than needed
+        self.assertIn("if (liveBusy", js)                                  # no overlapping refreshes
+        self.assertNotRegex(js, r"new WebSocket|EventSource")              # polling, not push
 
 
 if __name__ == "__main__":

@@ -121,6 +121,7 @@ input:focus-visible, select:focus-visible, button:focus-visible {
 .button.primary:hover { background: var(--accent-dark); }
 .button.danger { color: var(--down); border-color: #e7b4ae; }
 .button.danger:hover { background: var(--down-bg); }
+.button.live-toggle.on { background: var(--up-bg); border-color: #a6dcc0; color: var(--up); font-weight: 600; }
 .button.small { padding: 4px 10px; min-height: 30px; font-size: 0.85rem; }
 
 .inline-form { display: flex; gap: 6px; align-items: center; }

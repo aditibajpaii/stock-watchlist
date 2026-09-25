@@ -594,14 +594,87 @@ Open http://127.0.0.1:8000/ in the browser. It needs no internet access.
       Network: requests go to /users/…, /instruments, /ticks/ingest on
       127.0.0.1:8000 only (no CDN, nothing to port 5432)
 - [ ] **92_frontend-tests.png** —
-      `python -m unittest tests.test_frontend -v` (13 tests OK)
+      `python -m unittest tests.test_frontend -v` (13 tests OK in Phase 8; 14 after Phase 9)
 - [ ] **93_narrow-window.png** _(optional)_ — the page in a narrow
       window: navigation moves to a top bar
 
 ⚠ Screenshots 82–86 write to stock_watchlist. Reset it afterwards with
 the Phase 7 command above.
 
-## Later phases (not yet available)
+## Phase 9 – Optional Binance live feed
 
-- [ ] _(later)_ DB Inspector (latest 10 ticks / events); live alert via SSE
-- [ ] _(Phase 9)_ SERIALIZABLE demonstration (optional)
+Needs internet access to Binance. If it isn't available, skip the live
+screenshots: the replay screenshots (Phase 5) show the same ingestion and
+alert path.
+
+### Setup (3 terminals, project root, `source .venv/bin/activate` in each)
+```sh
+# TERMINAL 1: clean classroom database (drops and rebuilds all tables)
+psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql \
+     -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
+# TERMINAL 1: then the web app
+uvicorn app.main:app --reload
+# TERMINAL 2: the live feed (below)      TERMINAL 3: psql / curl
+```
+Do NOT run a replay before the live feed. Its ticks are stamped up to
+7 min 40 s into the future, and the live feed refuses to start (that
+refusal is screenshot 105).
+
+### Screenshots
+
+- [ ] **100_clean-counts.png** — `psql -d stock_watchlist -f sql/08_inspect_live.sql`
+      right after the reset: 3 / 7 / 5 / 11 / 0 / 6 / 0, empty tick and
+      alert lists
+- [ ] **101_live-feed-running.png** — TERMINAL 2:
+      `python -m app.live_feed --symbols ETHUSDT --max-events 20`
+      (Connecting… wss://data-stream.binance.vision…, lines ending in
+      `aggTrade:<id> -> INSERTED tick=N`, then the summary)
+- [ ] **102_binance-ticks-sql.png** — TERMINAL 3:
+      ```sh
+      psql -d stock_watchlist -c "SELECT t.tick_id, i.symbol, t.source, t.source_event_id, t.price, t.volume, t.observed_at, t.ingested_at FROM price_ticks t JOIN instruments i USING (instrument_id) WHERE t.source = 'BINANCE' ORDER BY t.tick_id DESC LIMIT 10;"
+      ```
+      (source BINANCE; source_event_id `aggTrade:…`; observed_at slightly
+      before ingested_at)
+- [ ] **103_live-latest-api.png** — `curl -s http://127.0.0.1:8000/instruments/7/latest | python -m json.tool`
+      (`"source": "BINANCE"`)
+- [ ] **104_live-ui.png** — browser: Instruments → ETHUSDT "Latest price &
+      history" with **Live refresh: ON**, while TERMINAL 2 runs
+      `python -m app.live_feed --symbols ETHUSDT --duration-seconds 60`
+      (Source BINANCE, chart moving)
+- [ ] **105_timeline-refusal.png** _(optional)_ — run
+      `python -m app.replay data/replay_prices.csv`, then
+      `python -m app.live_feed --symbols ETHUSDT --max-events 5`
+      → "Stored replay data is ahead of real time. Reset the demo database
+      before starting live mode." Then reset the database (setup command).
+- [ ] **106_unsupported-symbol.png** _(optional)_ —
+      `python -m app.live_feed --symbols RELIANCE` → "not a BINANCE
+      instrument in the database … use the offline replay"
+- [ ] **107_live-alert.png** _(only if it really happens)_ — create a rule
+      close to the current price in the web UI (e.g. ETHUSDT ABOVE current
+      price + 0.50), run the feed, and capture the `ALERT event=…` line
+      and the Alert History row. If the market doesn't cross it, there
+      is no alert: do not fake one. Use the replay/Demo alerts
+      (screenshots 85, 87) as alert evidence instead.
+- [ ] **108_db-inspector.png** — `psql -d stock_watchlist -f sql/08_inspect_live.sql`
+      after the feed: ticks per source (BINANCE), latest 10 ticks, latest
+      alerts
+- [ ] **109_live-tests.png** — `python -m unittest tests.test_live_feed -v`
+      (24 tests OK; no internet needed)
+- [ ] **110_full-regression.png** — one terminal:
+      ```sh
+      psql -q -d stock_watchlist -f sql/02_schema_tests.sql | tail -4
+      psql -q -d stock_watchlist -f sql/verify_spec.sql 2>&1 | tail -1
+      psql -q -d stock_watchlist -f sql/04_alert_tests.sql | tail -4
+      bash tests/concurrency_test.sh | tail -1
+      python -m unittest tests.test_replay tests.test_indexes tests.test_api tests.test_frontend tests.test_live_feed
+      ```
+      (51/51, MATCH, 50/50, ALL CONCURRENCY CHECKS PASSED, 103 tests OK)
+
+⚠ Screenshots 101–108 write live ticks into stock_watchlist. Run the
+reset command afterwards so the classroom database is clean again.
+
+## Not built (by decision)
+
+- Server push (SSE/WebSocket) to the browser. The optional 5 s "Live
+  refresh" polling is used instead.
+- SERIALIZABLE demonstration (optional idea from Phase 1; not requested).

@@ -1,5 +1,8 @@
 psycopg[binary]==3.3.6
 fastapi==0.141.1
 uvicorn[standard]==0.54.0
+# WebSocket client for the optional Binance live feed (app/live_feed.py);
+# also pulled in by uvicorn[standard], pinned here because we import it
+websockets==17.1
 # needed only by the automated API tests (FastAPI TestClient)
 httpx==0.28.1

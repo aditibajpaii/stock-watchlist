@@ -2,7 +2,7 @@
 
 Factual notes only. Not report text — write your own sentences.
 Every value below was taken from the running database or from the SQL
-files. Status: **Phase 8 (web frontend) complete**. Items
+files. Status: **Phase 9 (optional Binance live feed) complete**. Items
 marked _(later phase)_ do not exist yet.
 
 ---
@@ -32,6 +32,8 @@ marked _(later phase)_ do not exist yet.
 | Backend | FastAPI 0.141.1, Uvicorn 0.54.0, Pydantic 2.13.5 (Starlette 1.7.0) |
 | API test client | httpx 0.28.1 (FastAPI TestClient) |
 | Frontend | plain HTML + CSS + JavaScript (no framework, no npm, no CDN); served by FastAPI |
+| WebSocket client | websockets 17.1 (sync client; already a uvicorn[standard] dependency, now pinned) |
+| Live market data | Binance Spot public WebSocket, `wss://data-stream.binance.vision`, `<symbol>@aggTrade`, no API key |
 | Browser used for UI checks | Google Chrome 153 (headless, driven over the DevTools protocol) |
 
 ## Tables (7)
@@ -592,7 +594,7 @@ Details: docs/FRONTEND.md
 | app/static/styles.css | layout, cards, tables, badges, narrow-window rules | 204 |
 | app/static/api.js | `api()` fetch helper, `h()` safe DOM builder, decimal/time formatting | 119 |
 | app/static/app.js | views, loading/empty/error states, forms | 763 |
-| tests/test_frontend.py | 13 serving/static-scan tests | 254 |
+| tests/test_frontend.py | 13 serving/static-scan tests (14 after Phase 9) | 254 (Phase 8) |
 
 - URL: http://127.0.0.1:8000/ (same uvicorn process as the API)
 - Serving: `GET /` → index.html (hidden from OpenAPI); `/static/*` →
@@ -614,7 +616,7 @@ Details: docs/FRONTEND.md
   same body → DUPLICATE
 - Alerts shown = rows of alert_events (via GET /users/{id}/alerts); no
   alert logic in JavaScript
-- No polling; manual Refresh button
+- No polling in Phase 8; manual Refresh button (Phase 9 added an optional 5 s "Live refresh", default OFF)
 - Client-side checks (quicker messages only; PostgreSQL still enforces):
   threshold/price plain decimal > 0, ≤ 10 integer digits, ≤ 8 decimals
   (NUMERIC(18,8)); volume ≤ 16 integer digits (NUMERIC(24,8)); cooldown
@@ -656,6 +658,81 @@ passed; no JavaScript exceptions.
   tables scroll inside their card; sidebar becomes a top bar below
   760 px
 
+## Live Binance feed (Phase 9)
+
+Details and official sources: docs/LIVE_FEED.md
+
+| File | Role |
+|---|---|
+| app/live_feed.py | CLI worker: Binance aggTrade WebSocket → ingest_tick(..., 'BINANCE', ...) |
+| tests/test_live_feed.py | 24 tests, no internet; throwaway DB |
+| sql/08_inspect_live.sql | read-only inspector: counts, ticks per source, latest 10 ticks, latest 10 alert_events |
+
+- Command: `python -m app.live_feed --symbols ETHUSDT --max-events 20`
+  (also `--duration-seconds N`, `--quiet`, `--verbose`; Ctrl+C stops)
+- Separate process; FastAPI startup unchanged
+- Official docs checked 2026-09-25: developers.binance.com Spot
+  "WebSocket Streams" = github.com/binance/binance-spot-api-docs
+  web-socket-streams.md (CHANGELOG last updated 2026-09-18)
+- Endpoint `wss://data-stream.binance.vision` (market data only);
+  combined stream `/stream?streams=<sym>@aggTrade/...`; no credentials
+- Live symbols: active instruments with exchange BINANCE → seed BTCUSDT,
+  ETHUSDT. NSE is never live (replay / manual only)
+
+| ingest_tick argument | From aggTrade event |
+|---|---|
+| exchange | 'BINANCE' |
+| symbol | `s` |
+| observed_at | `T` trade time (ms) → UTC timestamptz, integer arithmetic |
+| price | `Decimal(p)` (string in the payload) |
+| volume | `Decimal(q)` |
+| source | 'BINANCE' |
+| source_event_id | `'aggTrade:' || a` (Binance aggregate trade id) |
+
+- Only SQL in the worker: `SELECT … FROM ingest_tick(…)` and a SELECT
+  of alert_events for printing. No INSERT/UPDATE/DELETE (test 13a)
+- Start checks: symbol must be an active BINANCE instrument (else exit 1);
+  refuse if a stored tick for those instruments is > 5 s after now
+  ("Stored replay data is ahead of real time…", exit 2); nothing deleted
+- Reconnect: back-off 1, 2, 4, 8, 16 s; gives up after 5 consecutive
+  failures (exit 3); counter reset after a connection that delivered
+  events; `serverShutdown` → reconnect
+- No throttling/sampling of events; demo size controlled by symbols,
+  `--max-events`, `--duration-seconds`
+- Measured event rate (30 s, 2026-09-25): BTCUSDT 25.2/s, ETHUSDT 20.2/s;
+  0 out-of-order trade times
+- Ctrl+C: stopped in 1.04–1.05 s (3 runs, real SIGINT), exit 0, summary
+  printed
+
+Real network smoke test (2026-09-25, throwaway DB
+stock_watchlist_live_smoke, dropped afterwards):
+- ETHUSDT `--max-events 15`: 15 INSERTED, source BINANCE, ids
+  `aggTrade:2089678070…084`, 15 distinct; ingested_at − observed_at =
+  78–116 ms; 14 of 15 shared one trade time (tie → tick_id order)
+- same provider id sent again through ingest_tick → `DUPLICATE`
+- BTCUSDT + ETHUSDT `--duration-seconds 5`: 79 inserted, 0 skipped,
+  0 reconnects
+- replay (30 ticks, 8 alerts) then live start → refused with the
+  timeline message, exit 2, nothing deleted
+- 0 live alerts: seed thresholds not crossed by the market (BTC ≈
+  84,000 vs ABOVE 100000; ETH ≈ 2,715 already below 3000). No alert was
+  fabricated
+
+Web UI addition: header button "Live refresh: OFF/ON" (default OFF).
+When ON, every 5 s it re-reads health, watchlists, alerts and the open
+instrument panel, with no "Loading…" flicker. It is skipped while
+another refresh is running, while the tab is hidden, or while a form
+field in the page is focused. It switches itself off when the server or
+database is unavailable. Checked in headless Chrome with the real feed
+running: the page showed new BINANCE prices; `/health` was requested 2×
+in 10.5 s when ON and 0× in 11 s after OFF.
+
+Clean reset (verified: 3 users / 7 instruments / 5 watchlists / 11
+items / 6 rules / 0 ticks / 0 events, psql exit 0):
+```
+psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
+```
+
 ## Build / run order
 
 1. sql/00_schema.sql
@@ -669,6 +746,8 @@ passed; no JavaScript exceptions.
    `python -m unittest tests.test_replay -v`,
    `python -m unittest tests.test_indexes -v`,
    `python -m unittest tests.test_api -v`
+5d. live feed (optional, internet): `python -m app.live_feed --symbols ETHUSDT --max-events 20`
+   (`python -m unittest tests.test_live_feed -v`; inspector `sql/08_inspect_live.sql`)
 5c. API + web UI: `uvicorn app.main:app --reload` → http://127.0.0.1:8000/
    (`python -m unittest tests.test_frontend -v`)
 5b. benchmark (throwaway DB): `python tests/benchmark_indexes.py`, then
@@ -689,8 +768,14 @@ All results 2026-09-25, PostgreSQL 18.6, after a clean rebuild (00 → 01 → 03
 | Python replay (Phase 5) | tests/test_replay.py | **18 / 18 PASS** (unittest) |
 | Index definition + planner (Phase 6) | tests/test_indexes.py | **15 / 15 PASS** |
 | REST API (Phase 7) | tests/test_api.py | **32 / 32 PASS** |
-| Frontend serving (Phase 8) | tests/test_frontend.py | **13 / 13 PASS** |
+| Frontend serving (Phase 8, +1 in Phase 9) | tests/test_frontend.py | **14 / 14 PASS** |
+| Live feed (Phase 9) | tests/test_live_feed.py | **24 / 24 PASS** (no internet) |
 | Browser workflows (Phase 8) | headless Chrome script (not in repo) | **37 / 37 checks** |
+
+Re-run after Phase 9 (2026-09-25): 02 → 51/51, verify_spec → MATCH,
+04 → 50/50, concurrency → 17/17, replay → 18/18, index → 15/15,
+API → 32/32, frontend → 14/14, live feed → 24/24. Dev DB unchanged
+(3/7/5/11/0/6/0); no live data was written to it.
 
 Re-run after Phase 8 (2026-09-25): 02 → 51/51, verify_spec → MATCH,
 04 → 50/50, concurrency → 17/17, replay → 18/18, index → 15/15,
@@ -824,7 +909,33 @@ stock_watchlist_frontend_test):
 | 11 | JS: no localhost/127.0.0.1/:8000; exactly one fetch(); every api("…") path starts with "/" and matches an OpenAPI path |
 | 12 | no password/secret/token/postgres:// /dbname/DB_NAME/psycopg/5432/database name in frontend files |
 | 13 | no innerHTML / outerHTML / insertAdjacentHTML / document.write / eval / new Function |
+| 14 | (Phase 9) live-refresh button starts OFF; one setInterval, cleared when off; interval ≥ 3000 ms; overlap guard; no WebSocket/EventSource in the browser |
+
+Phase 9 live-feed tests (24; fixtures in the official aggTrade format;
+no internet; throwaway DB stock_watchlist_p9_test per test):
+
+| # | Test |
+|---|---|
+| 01 | documented combined-stream aggTrade parses to symbol, Decimal price/qty, trade time, agg id; raw (unwrapped) and bytes accepted |
+| 02 | symbol mapping; stream URL `…/stream?streams=btcusdt@aggTrade/ethusdt@aggTrade`; CLI upper-cases and de-duplicates symbols |
+| 03–04 | price "84321.12345678" and qty "0.00000001" stay exact Decimals |
+| 05 | T 1672515782136 → 2022-12-31 19:43:02.136 UTC, aware; uses T not E |
+| 06 | source_event_id `aggTrade:<a>`, same id for the same event, different for a different id |
+| 07 | 19 malformed messages rejected (bad JSON, list, trade/reply events, float/NaN/Infinity/0/negative price, negative qty, missing/string/zero T, bool/negative id, no symbol); serverShutdown recognised |
+| 08a–c | stream event for an unrequested symbol rejected; bad CLI args exit 2; RELIANCE (NSE) and DOGEUSDT refused before any network use, no instrument created |
+| 09 | inactive ETHUSDT refused, no ticks |
+| 10 | 3 events → 3 rows with source BINANCE, exact ids/times/prices; PostgreSQL pg_stat_user_functions shows ingest_tick called 3× |
+| 11 | same aggTrade re-delivered after a reconnect → DUPLICATE, stored once |
+| 12 | ETH 3010.50 → 2999.99 → 2998 creates exactly 1 alert (kavya rule 6) on the 2nd tick |
+| 13a–b | worker source has no INSERT/UPDATE/DELETE, one ingest_tick call, no crossing/cooldown code, no uuid; with rule 6 disabled the same crossing creates 0 alert_events |
+| 14, 14b | stored tick 7 min in the future → refuse (exit 2, nothing deleted), other symbol may start; 2 s ahead is tolerated |
+| 15 | --max-events 5 → exactly 5 ticks; --duration-seconds stops a silent stream |
+| 16a–c | connect failure → closed connection → serverShutdown → re-delivered event: waits 1, 1, 2 s, 3 unique ticks; 6 failures → exit 3 after waits 1, 2, 4, 8, 16; real websockets client against a local WebSocket server (requested path checked) |
+| 17 | Ctrl+C (KeyboardInterrupt) → exit 0, committed tick kept |
+| 18 | DB error (price > NUMERIC(18,8), 22003) → exit 2, earlier tick kept, failing event rolled back |
+| 19 | malformed messages skipped and counted, never stored |
 
 ## Not yet implemented
 
-- live push to the browser (SSE), Binance live feed _(later phases)_
+- server push to the browser (SSE/WebSocket): not built by design; optional 5 s polling instead
+- live NSE/BSE prices: not available (replay / manual only)

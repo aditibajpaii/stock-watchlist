@@ -857,6 +857,158 @@ ANSWER:
 - No DB Inspector view yet (it is in the project scope in CLAUDE.md, but
   was not part of the Phase 8 brief).
 
+## Phase 9 – Optional Binance live feed
+
+### 61. Why a WebSocket instead of calling an HTTP price endpoint repeatedly?
+
+WHY: we need every trade, in order, as soon as it happens.
+VIVA: "Why not just call a price API every few seconds?"
+ANSWER:
+- Polling only gives snapshots. Anything that happens between two calls
+  is lost, including a price that crosses a threshold and comes back.
+  Our alerts are edge-triggered, so a missed crossing is a missed alert.
+- The WebSocket pushes each aggregate trade: about 20–25 per second for
+  BTC/ETH (measured). Every one is stored with Binance's own trade id and
+  trade time.
+- One long-lived connection uses less than hundreds of requests per
+  minute, and needs no API key.
+
+### 62. Why is the live feed a separate process, not part of FastAPI?
+
+VIVA: "Why not start the Binance connection when the API starts?"
+ANSWER:
+- The API must start and work without internet. An endless network loop
+  inside it could slow or crash request handling, and every uvicorn
+  reload or worker would open another feed.
+- Running separately means one clear owner per feed ("one active feed
+  per instrument"), started, limited and stopped from the command line
+  like the replay.
+- Both processes meet only in PostgreSQL. The API sees live ticks
+  exactly as it sees replay ticks.
+
+### 63. Why still call ingest_tick() for live events?
+
+VIVA: "A direct INSERT would be faster. Why the function?"
+ANSWER:
+- It is the single official ingestion path, for REPLAY, MANUAL and
+  BINANCE alike.
+- It locks the instrument row before inserting. That prevents the race
+  in which two concurrent ticks both see the same "previous price" and
+  fire an alert twice; the Phase 4 concurrency test showed two alerts
+  for one crossing without the lock.
+- ON CONFLICT DO NOTHING turns re-received events into DUPLICATE, and
+  the AFTER INSERT trigger evaluates the alert rules.
+- The worker contains no INSERT at all (test 13a). Test 10 reads
+  PostgreSQL's own statistics: ingest_tick was called once per event.
+- Speed is no issue: ingest_tick takes about 0.2 ms with the index,
+  while ticks arrive every 40–50 ms.
+
+### 64. Why derive source_event_id from Binance's aggregate trade id?
+
+VIVA: "Why 'aggTrade:2089678070' and not a random UUID?"
+ANSWER:
+- It must mean "this exact market event". After a reconnect, or with
+  two worker runs, the same trade can arrive twice. Because the ID is
+  the same, UNIQUE (source, instrument_id, source_event_id) makes the
+  second one DUPLICATE, and nothing is stored twice (tests 11 and 16a;
+  smoke test).
+- A random UUID would make every copy look new: duplicate rows, and
+  possibly a second alert.
+- The ID is unique per symbol at Binance; our key includes
+  instrument_id, which matches.
+
+### 65. Why use Binance's trade time as observed_at?
+
+VIVA: "Why not the time your program received the message?"
+ANSWER:
+- observed_at is *market* time. Cooldowns, "previous tick" and late-tick
+  detection are all defined on it.
+- Receive time includes network and processing delay (78–116 ms in the
+  smoke test), and it would change if the same event were received
+  again.
+- We use `T` (trade time), not `E` (event time), and convert
+  milliseconds with integer arithmetic to an aware UTC timestamp.
+  ingested_at still records when the row arrived, so both times are
+  kept.
+- Many aggTrades share one millisecond (14 of 15 in the smoke test).
+  The tie is broken by tick_id, as for every source.
+
+### 66. Why keep the offline replay now that we have live prices?
+
+VIVA: "What happens if Binance is unavailable during your demo?"
+ANSWER:
+- Nothing essential breaks. The live feed is optional, and on network
+  failure it retries 5 times, then exits with the replay command in its
+  message.
+- `python -m app.replay data/replay_prices.csv --delay-ms 300` goes
+  through the same ingest_tick → trigger → alert_events path.
+- The replay is deterministic: always 30 ticks and exactly 8 alerts on a
+  fresh database, while the live market may cross no threshold during
+  the viva.
+- The replay also covers NSE stocks, the project's main domain, for
+  which we have no live source.
+
+### 67. Why not scrape NSE/BSE prices?
+
+VIVA: "Why are Indian stock prices not live?"
+ANSWER:
+- Scraping websites is fragile (the HTML changes), often against the
+  site's terms of use, and it has no stable event id or exact trade
+  time. That would break duplicate detection and market-time ordering.
+- Official live NSE data needs a broker/vendor account (e.g. Upstox)
+  with credentials. That is outside our scope and was never allowed to
+  be a demo dependency.
+- So NSE is honestly labelled replay/manual. Crypto is live only because
+  Binance publishes an official, free, keyless market-data stream.
+
+### 68. Why don't we throttle away market events?
+
+VIVA: "20 trades a second is a lot. Why not keep one per second?"
+ANSWER:
+- Throttling changes the data the alert engine sees. If the price dips
+  below 3000 and recovers within one second, a sampled stream might never
+  show the dip, and a BELOW alert would silently not fire. Every tick we
+  do store would also look like the "previous" tick of a gap.
+- Growth is controlled honestly instead: one symbol, `--max-events`,
+  `--duration-seconds`, Ctrl+C, and a one-command reset.
+- The database handles the rate easily (≈ 0.2 ms per ingest_tick).
+
+### 69. Why refuse to start when stored ticks are "in the future"?
+
+VIVA: "Why does the live feed refuse after you ran the replay?"
+ANSWER:
+- The replay stamps ticks up to 7 min 40 s ahead of real time. A live
+  trade happening now would be older than that stored tick, so
+  PostgreSQL's rule classifies it as LATE: stored, but never evaluated
+  for alerts.
+- Instead of silently producing a feed that can't alert, the worker
+  stops with "Stored replay data is ahead of real time. Reset the demo
+  database…".
+- It deletes nothing and does not bypass the late-tick rule. 5 s of
+  clock difference is tolerated.
+
+### 70. How does "Live refresh" differ from real-time push?
+
+VIVA: "Is the web page real-time now?"
+ANSWER:
+- Nearly, but by polling. With Live refresh ON, the page re-reads the
+  normal API endpoints every 5 s.
+- It is off by default, never runs two refreshes at once, pauses in
+  background tabs and while you type in a form, and turns itself off if
+  the server or database goes away.
+- True push (SSE from PostgreSQL NOTIFY) was judged unnecessary
+  complexity. The durable data is in alert_events either way.
+
+### Phase 9 limits (say these first)
+
+- Crypto only; NSE is replay/manual.
+- The feed needs internet access to Binance.
+- Seed thresholds are far from today's prices, so a short live run
+  usually fires no alert. That is correct behaviour, not a bug.
+- The browser polls; nothing is pushed to it.
+- Don't run the replay and the live feed on the same instrument at the
+  same time.
+
 ---
 
 ## Quick-fire drill
@@ -895,3 +1047,9 @@ ANSWER:
 24. Does the browser ever talk to PostgreSQL? *No, only to FastAPI (relative URLs).*
 25. Where do the alerts on the page come from? *alert_events, via GET /users/{id}/alerts.*
 26. Why "Resend last tick"? *Same source_event_id → DUPLICATE; shows the UNIQUE key working.*
+27. Live stream used? *Binance Spot public `<symbol>@aggTrade` on wss://data-stream.binance.vision, no API key.*
+28. Live source_event_id? *`aggTrade:<a>` (Binance aggregate trade id), so re-received events are DUPLICATE.*
+29. Live observed_at? *Binance trade time `T` (ms) as UTC timestamptz; not receive time.*
+30. Live insert path? *ingest_tick(..., 'BINANCE', ...); the worker has no INSERT.*
+31. Binance down in the viva? *Use the replay: same ingest_tick → trigger → alert_events path, 8 alerts.*
+32. Reset command? *psql -d stock_watchlist -f 00_schema -f 01_seed -f 03_functions_triggers -f 06_indexes → 3/7/5/11/6 rules, 0 ticks, 0 events.*
