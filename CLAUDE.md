@@ -169,6 +169,9 @@ Indexes:
 - API: `uvicorn app.main:app --reload` (FastAPI, plain psycopg SQL, no ORM);
   docs in docs/API.md; tests `python -m unittest tests.test_api -v`
   (throwaway DBs). Error mapping in app/errors.py by (SQLSTATE, constraint).
+- Web UI: same uvicorn → http://127.0.0.1:8000/ (app/static: index.html,
+  styles.css, api.js, app.js; no framework/npm/CDN); notes docs/FRONTEND.md;
+  tests `python -m unittest tests.test_frontend -v`
 
 ## Working rules
 

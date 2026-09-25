@@ -17,6 +17,8 @@ pip install -r requirements.txt        # first time only
 uvicorn app.main:app --reload          # http://127.0.0.1:8000
 ```
 
+- **Web UI (Phase 8):** http://127.0.0.1:8000/ (plain HTML/CSS/JS from
+  app/static; see docs/FRONTEND.md). It is not part of the OpenAPI spec.
 - **Swagger UI:** http://127.0.0.1:8000/docs. It loads its JavaScript and
   CSS from `cdn.jsdelivr.net`, so the browser needs internet access.
 - **Offline alternatives:** `/openapi.json` (the machine-readable spec)

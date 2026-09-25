@@ -710,6 +710,153 @@ ANSWER:
   would silently change what those events meant.
 - To change a threshold: disable the old rule and create a new one.
 
+## Phase 8 – Web frontend
+
+### 51. Why plain HTML, CSS and JavaScript?
+
+WHY: the marks are for the database; the UI only has to show it clearly.
+VIVA: "Why no framework for the frontend?"
+ANSWER:
+- The UI is six views over 18 existing endpoints. Four files (index.html,
+  styles.css, api.js, app.js) are enough, and every line can be
+  explained.
+- No build step: no npm, no bundler. FastAPI serves the files as they
+  are, so the demo works offline on any laptop that has Python and
+  PostgreSQL.
+- There is nothing to download at demo time. No CDN script can fail over
+  college Wi-Fi.
+
+### 52. Why no React?
+
+VIVA: "Wouldn't React be more modern?"
+ANSWER:
+- React pays off with large, deeply interactive UIs and teams. Ours is a
+  few tables and forms that reload after each action.
+- It would add Node, npm, JSX and a build step, all outside the approved
+  stack, to show the same data.
+- The DBMS parts (constraints, ingest_tick, triggers, the index) would
+  not change at all. React adds nothing for this rubric.
+
+### 53. Why does the browser call FastAPI and not PostgreSQL?
+
+WHY: a browser cannot safely hold database access.
+VIVA: "Why not connect the web page directly to the database?"
+ANSWER:
+- Browsers cannot speak PostgreSQL's wire protocol. Even if they could,
+  database connection details in JavaScript would be readable by every
+  visitor, who could then run any SQL.
+- FastAPI is the only client of PostgreSQL. It exposes a fixed set of
+  operations, uses parameterized SQL, and turns database errors into
+  safe messages.
+- Test 12 in test_frontend.py checks that the frontend files contain no
+  password, connection string, port 5432 or database name.
+- In DevTools → Network, every request goes to 127.0.0.1:8000 (FastAPI).
+
+### 54. Why are alerts computed in PostgreSQL, not JavaScript?
+
+VIVA: "The page already has the prices; why not check thresholds in JS?"
+ANSWER:
+- Alerts must fire even when no browser is open: the replay (and later
+  Binance) feeds insert ticks with no page running.
+- The rules need the previous tick in (observed_at, tick_id) order, the
+  cooldown, late-tick detection and a lock against concurrent ingestion.
+  Only the database sees every tick, and the trigger runs inside the
+  inserting transaction. We proved this in the Phase 4 concurrency tests.
+- Each open tab computing its own alerts could disagree, fire twice, or
+  miss a crossing between refreshes.
+- So the page only *displays* alert_events. The Demo view finds the
+  alerts for a new tick by matching tick_id in the returned list; it
+  never compares a price with a threshold.
+
+### 55. Why does alert history come from alert_events?
+
+VIVA: "Where does the Alert History screen get its rows?"
+ANSWER:
+- From GET /users/{id}/alerts, which joins alert_events → alert_rules →
+  price_ticks → instruments.
+- alert_events is the durable record: one row per real firing, written by
+  the trigger in the same transaction as the tick. If the transaction
+  rolls back, neither the tick nor the event exists.
+- NOTIFY (and later SSE) is only a wake-up signal. Refresh re-reads the
+  table, so nothing is lost if the page was closed.
+- The table stores only (event_id, rule_id, tick_id, fired_at). Symbol,
+  threshold, price and observed time come from the joins, so there is no
+  copied data to drift out of sync.
+
+### 56. Why is there no latest_price table?
+
+VIVA: "Isn't it slow to find the latest price from all ticks?"
+ANSWER:
+- The latest price is derived data: the newest row of price_ticks for an
+  instrument. Storing it again would need an extra UPDATE on every tick
+  and could disagree with the ticks table (a redundancy, update anomaly).
+- ix_price_ticks_instrument_time (instrument_id, observed_at DESC,
+  tick_id DESC) makes the lookup an index read of the first entry. On
+  500,000 ticks, latest-50 took 0.020 ms (Phase 6).
+- The Watchlists view gets every item's latest price in one query
+  (LEFT JOIN LATERAL … LIMIT 1), not one request per instrument.
+
+### 57. Why relative API URLs?
+
+VIVA: "Why does app.js call '/users' and not 'http://127.0.0.1:8000/users'?"
+ANSWER:
+- A relative URL goes to whichever server delivered the page. The same
+  files work on another port, another machine, or behind a proxy, with
+  no edits.
+- Page and API share one origin, so the browser needs no CORS settings.
+- Test 11 checks that there is no host, localhost or port in the JS, and
+  that every api("…") path exists in the OpenAPI spec.
+
+### 58. How does the UI avoid XSS?
+
+VIVA: "A watchlist name could contain `<script>`. Is that dangerous?"
+ANSWER:
+- No. All dynamic text goes in through textContent / text nodes, via the
+  `h()` helper, so the browser shows `<script>` as characters and never
+  runs it.
+- The code never uses innerHTML (test 13 checks this). The only HTML is
+  the fixed index.html.
+- SQL injection is a separate problem, handled by the API's parameterized
+  SQL (note 41). XSS is handled in the browser.
+
+### 59. Why keep decimals as strings in the browser?
+
+VIVA: "Why not parseFloat the price?"
+ANSWER:
+- JavaScript numbers are binary floats: 0.1 + 0.2 ≠ 0.3.
+- The API sends "3060.50000000". The UI formats that text (separators,
+  trimmed zeros) without converting it. A threshold is sent as the text
+  the user typed, and PostgreSQL stores it as NUMERIC(18,8).
+- Number() is used in one place only: pixel positions in the SVG chart,
+  where a rounding error of a millionth of a pixel does not matter.
+
+### 60. Why does "no price data" not show as an error?
+
+VIVA: "GET /instruments/1/latest returns 404. Is the UI broken?"
+ANSWER:
+- No. The API answers 404 "Instrument has no price ticks yet." for an
+  instrument with no ticks. The UI recognises that case and shows "No
+  price data yet".
+- A real failure (server down, database down) shows a red message, and
+  the header badge changes to "Server unreachable" or "Database
+  unavailable".
+- Every loader replaces its "Loading…" text in both the success and the
+  error path, so nothing stays stuck.
+
+### Phase 8 limits (say these before the examiner finds them)
+
+- No live push yet. The page updates on Refresh or after your own
+  action. SSE comes later.
+- No login. The demo user selector just picks whose data to show.
+- The client-side checks are only for quicker messages. PostgreSQL still
+  enforces every rule.
+- The alert list shows the latest 50 and the history table the latest 50
+  or 100 ticks; there is no paging.
+- The chart is deliberately simple: one line, min/max labels, first and
+  last time.
+- No DB Inspector view yet (it is in the project scope in CLAUDE.md, but
+  was not part of the Phase 8 brief).
+
 ---
 
 ## Quick-fire drill
@@ -743,3 +890,8 @@ ANSWER:
 19. Duplicate rule via API → ? *409 with constraint uq_alert_rules_definition.*
 20. Manual ingest endpoint uses? *ingest_tick(..., 'MANUAL', ...); 201 INSERTED / 200 DUPLICATE.*
 21. Deleting a rule via API also deletes? *Its alert_events (ON DELETE CASCADE); ticks stay.*
+22. Frontend URL? *http://127.0.0.1:8000/, served by the same uvicorn as the API.*
+23. How many fetch() calls in the frontend? *One, inside api() in api.js.*
+24. Does the browser ever talk to PostgreSQL? *No, only to FastAPI (relative URLs).*
+25. Where do the alerts on the page come from? *alert_events, via GET /users/{id}/alerts.*
+26. Why "Resend last tick"? *Same source_event_id → DUPLICATE; shows the UNIQUE key working.*

@@ -541,7 +541,67 @@ psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_see
      -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
 ```
 
+## Phase 8 – Web frontend
+
+### Setup
+```sh
+cd "/Users/aditi/dbms project"
+source .venv/bin/activate
+uvicorn app.main:app --reload            # TERMINAL 1, leave running
+```
+Open http://127.0.0.1:8000/ in the browser. It needs no internet access.
+
+- **Recommended:** reset the dev DB first (the command at the end of
+  Phase 7) so the demo starts from seed data.
+- **Optional, for alerts to show on screen:** in TERMINAL 2, run
+  `python -m app.replay data/replay_prices.csv --delay-ms 300`, then
+  press **Refresh**.
+- **Or** make a crossing in the Demo view: RELIANCE 3000, then 3060.50,
+  with a rule RELIANCE ABOVE 3050.
+- Manual ticks use the current time. Right after a replay (whose ticks
+  run up to 7 min 40 s ahead), a manual tick is *late*: it is stored,
+  but fires no alert.
+
+### Screenshots
+
+- [ ] **80_ui-dashboard.png** — Dashboard: 4 stat cards, Recent alerts,
+      Watchlist overview, green "API + database connected" badge, demo
+      user selector
+- [ ] **81_ui-watchlists.png** — Watchlists: each list with latest price
+      and observed time per instrument
+- [ ] **82_ui-duplicate-item.png** — add an instrument that is already in
+      the list → red message "RELIANCE is already in this watchlist."
+      (PK pk_watchlist_items, mapped by the API)
+- [ ] **83_ui-alert-rules.png** — Alert Rules: ABOVE/BELOW badges, ACTIVE
+      and DISABLED rules (disable one first), cooldown inputs
+- [ ] **84_ui-delete-rule-warning.png** — Delete on a rule → the
+      confirmation text "Deleting this rule also removes its alert
+      history" (press Cancel)
+- [ ] **85_ui-manual-tick.png** — Demo: tick result INSERTED with
+      tick_id and "Alerts recorded for … by this tick"
+- [ ] **86_ui-duplicate-tick.png** — "Resend last tick" → DUPLICATE,
+      tick_id "– (nothing stored)"
+- [ ] **87_ui-alert-history.png** — Alert History: fired time, symbol,
+      direction, threshold, triggered price, observed time
+- [ ] **88_ui-price-history.png** — Instruments → "Latest price &
+      history" on an instrument with ticks: latest card, SVG chart, table
+- [ ] **89_ui-no-data.png** — an instrument with no ticks → "No price
+      data yet" (a normal state, not an error)
+- [ ] **90_ui-db-unavailable.png** _(optional)_ — `brew services stop
+      postgresql@18`, press Refresh → "Database unavailable" badge and
+      message; then `brew services start postgresql@18`
+- [ ] **91_ui-devtools-network.png** _(optional)_ — browser DevTools →
+      Network: requests go to /users/…, /instruments, /ticks/ingest on
+      127.0.0.1:8000 only (no CDN, nothing to port 5432)
+- [ ] **92_frontend-tests.png** —
+      `python -m unittest tests.test_frontend -v` (13 tests OK)
+- [ ] **93_narrow-window.png** _(optional)_ — the page in a narrow
+      window: navigation moves to a top bar
+
+⚠ Screenshots 82–86 write to stock_watchlist. Reset it afterwards with
+the Phase 7 command above.
+
 ## Later phases (not yet available)
 
-- [ ] _(later)_ watchlist UI; fired-alert UI; DB Inspector; live alert via SSE
+- [ ] _(later)_ DB Inspector (latest 10 ticks / events); live alert via SSE
 - [ ] _(Phase 9)_ SERIALIZABLE demonstration (optional)

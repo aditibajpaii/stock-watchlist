@@ -2,7 +2,7 @@
 
 Factual notes only. Not report text — write your own sentences.
 Every value below was taken from the running database or from the SQL
-files. Status: **Phase 7 (FastAPI backend) complete**. Items
+files. Status: **Phase 8 (web frontend) complete**. Items
 marked _(later phase)_ do not exist yet.
 
 ---
@@ -31,7 +31,8 @@ marked _(later phase)_ do not exist yet.
 | Python test framework | unittest (standard library, no extra dependency) |
 | Backend | FastAPI 0.141.1, Uvicorn 0.54.0, Pydantic 2.13.5 (Starlette 1.7.0) |
 | API test client | httpx 0.28.1 (FastAPI TestClient) |
-| Frontend | _(later phase)_ HTML/CSS/JS |
+| Frontend | plain HTML + CSS + JavaScript (no framework, no npm, no CDN); served by FastAPI |
+| Browser used for UI checks | Google Chrome 153 (headless, driven over the DevTools protocol) |
 
 ## Tables (7)
 
@@ -581,6 +582,80 @@ Manual checks performed (2026-09-25, uvicorn + curl):
   joined alert → latest = 3060.50 → unknown symbol (404 SW001) → negative
   price (422) → DELETE rule (204) → alerts [] (cascade)
 
+## Web frontend (Phase 8)
+
+Details: docs/FRONTEND.md
+
+| File | Role | Lines |
+|---|---|---|
+| app/static/index.html | page skeleton: header, nav, 6 view sections, forms | 187 |
+| app/static/styles.css | layout, cards, tables, badges, narrow-window rules | 204 |
+| app/static/api.js | `api()` fetch helper, `h()` safe DOM builder, decimal/time formatting | 119 |
+| app/static/app.js | views, loading/empty/error states, forms | 763 |
+| tests/test_frontend.py | 13 serving/static-scan tests | 254 |
+
+- URL: http://127.0.0.1:8000/ (same uvicorn process as the API)
+- Serving: `GET /` → index.html (hidden from OpenAPI); `/static/*` →
+  StaticFiles mount of app/static; both send `Cache-Control: no-cache`
+- OpenAPI still 15 paths / 18 API endpoints; no API route changed
+- Views: Dashboard, Watchlists, Alert Rules, Alert History, Instruments
+  (with latest price + history + SVG chart), Demo (manual tick)
+- Demo user selector (GET /users); no login, no authentication
+- Browser → FastAPI only (relative URLs); never PostgreSQL
+- One `fetch()` call in the whole frontend (inside `api()`)
+- Dynamic text inserted with textContent / createTextNode; no innerHTML
+- Decimals kept as strings; formatted as text (thousands separators,
+  trailing zeros trimmed to 2 dp); Number() used only for chart pixel
+  positions
+- Rule threshold and tick price sent as the typed text, not a float
+- Timestamps shown in browser local time; raw ISO value in tooltip
+- Manual tick: observed_at = `new Date().toISOString()` (UTC, "Z");
+  source_event_id = `ui-<random UUID>`; "Resend last tick" re-sends the
+  same body → DUPLICATE
+- Alerts shown = rows of alert_events (via GET /users/{id}/alerts); no
+  alert logic in JavaScript
+- No polling; manual Refresh button
+- Client-side checks (quicker messages only; PostgreSQL still enforces):
+  threshold/price plain decimal > 0, ≤ 10 integer digits, ≤ 8 decimals
+  (NUMERIC(18,8)); volume ≤ 16 integer digits (NUMERIC(24,8)); cooldown
+  whole number 0 … 2147483647 (INTEGER)
+- Friendly messages from constraint names: pk_watchlist_items →
+  "RELIANCE is already in this watchlist.", uq_watchlists_user_name →
+  "arjun already has a watchlist named …"
+- Confirmation dialogs: delete watchlist, remove item, delete rule (text
+  warns that alert history is deleted by CASCADE)
+
+Manual browser checks (2026-09-25, headless Chrome 153, throwaway DB
+stock_watchlist_ui_manual, dropped afterwards): 37 / 37 scripted checks
+passed; no JavaScript exceptions.
+- user selector (arjun ↔ priya); instruments 7, BINANCE filter 2, BSE
+  empty state, search "tata" → TCS; no-tick instrument → "No price data
+  yet"
+- create watchlist; duplicate name message; add RELIANCE; duplicate item
+  message; create rule RELIANCE ABOVE 3050 (cooldown 60); bad threshold
+  / 9 decimals / negative cooldown rejected in the browser; duplicate
+  rule → 409 message
+- disable → DISABLED, enable → ACTIVE, cooldown → 120
+- ticks 3000 (INSERTED, tick 1, no alert) → 3060.50 (INSERTED, tick 2,
+  alert for arjun shown) → resend (DUPLICATE, nothing stored) → NSE NOPE
+  → "Unknown instrument" (404) → price −3 rejected in the browser
+- alert history 1 row; instrument filter; dashboard 3 / 4 / 1 / 7
+- instrument detail: latest 3,060.50 INR, MANUAL, history 2 rows +
+  chart
+- remove item; delete watchlist (Cancel keeps it, OK deletes); delete
+  rule → its alert history gone (CASCADE)
+- 12 BTCUSDT ticks crossing 100000 twice (cooldown 60 s, 6 min apart) →
+  2 alerts for rule 3
+- database unavailable (DB_NAME = non-existent) → "Database unavailable"
+  badge + message, no stuck "Loading…"; server stopped → "Server
+  unreachable"
+- XSS: watchlist named `<img src=x onerror=window.__pwned=1>` → shown as
+  text in Watchlists and Dashboard, 0 img elements created, script not
+  run (separate run, throwaway DB dropped)
+- widths 1400 / 1000 / 720 / 420 px: no horizontal page scroll; wide
+  tables scroll inside their card; sidebar becomes a top bar below
+  760 px
+
 ## Build / run order
 
 1. sql/00_schema.sql
@@ -594,7 +669,8 @@ Manual checks performed (2026-09-25, uvicorn + curl):
    `python -m unittest tests.test_replay -v`,
    `python -m unittest tests.test_indexes -v`,
    `python -m unittest tests.test_api -v`
-5c. API: `uvicorn app.main:app --reload`
+5c. API + web UI: `uvicorn app.main:app --reload` → http://127.0.0.1:8000/
+   (`python -m unittest tests.test_frontend -v`)
 5b. benchmark (throwaway DB): `python tests/benchmark_indexes.py`, then
    `psql -d stock_watchlist_benchmark -f sql/07_benchmark_queries.sql`
 6. demo: `python -m app.replay data/replay_prices.csv --delay-ms 300`,
@@ -613,6 +689,12 @@ All results 2026-09-25, PostgreSQL 18.6, after a clean rebuild (00 → 01 → 03
 | Python replay (Phase 5) | tests/test_replay.py | **18 / 18 PASS** (unittest) |
 | Index definition + planner (Phase 6) | tests/test_indexes.py | **15 / 15 PASS** |
 | REST API (Phase 7) | tests/test_api.py | **32 / 32 PASS** |
+| Frontend serving (Phase 8) | tests/test_frontend.py | **13 / 13 PASS** |
+| Browser workflows (Phase 8) | headless Chrome script (not in repo) | **37 / 37 checks** |
+
+Re-run after Phase 8 (2026-09-25): 02 → 51/51, verify_spec → MATCH,
+04 → 50/50, concurrency → 17/17, replay → 18/18, index → 15/15,
+API → 32/32, frontend → 13/13. Dev DB unchanged (3/7/5/11/0/6/0).
 
 Re-run after Phase 7 (2026-09-25): 02 → 51/51, verify_spec → MATCH,
 04 → 50/50, concurrency → 17/17, replay → 18/18, index → 15/15,
@@ -724,6 +806,25 @@ stock_watchlist_ctest, dropped afterwards):
 | 3 A holds ETHUSDT lock; B has older observed_at | B blocked ≈ 2.0 s, then classified late: stored, no event; exactly 1 alert |
 | 4 LISTEN session + committed crossing + rolled-back crossing + duplicate | exactly 1 notification, payload = committed event_id; rolled-back crossing left 0 ticks / 0 events |
 
+Phase 8 frontend tests (13, TestClient; API checks on throwaway DB
+stock_watchlist_frontend_test):
+
+| # | Test |
+|---|---|
+| 01 | GET / → 200 text/html, the index.html file, title present, Cache-Control no-cache |
+| 02 | /static/styles.css (text/css), app.js, api.js (javascript) served, same bytes as files |
+| 03 | missing static file → 404; `../` traversal attempts not served |
+| 04 | /docs 200; OpenAPI still 15 paths; `/` and /static not in the schema |
+| 05 | all 18 API (method, path) routes still registered; only extra route is GET / |
+| 06 | /health, /users, /instruments, latest 404, alert-rules still answer; unknown path 404 (no catch-all) |
+| 07 | index.html loads /static/api.js then /static/app.js and /static/styles.css; files exist |
+| 08 | the 6 view sections, nav buttons, user selector, refresh, forms, stat cards, replay command present |
+| 09 | every input/select in index.html has a `<label for>` |
+| 10 | no http(s):// or protocol-relative URLs, no @import / CDN names in any frontend file |
+| 11 | JS: no localhost/127.0.0.1/:8000; exactly one fetch(); every api("…") path starts with "/" and matches an OpenAPI path |
+| 12 | no password/secret/token/postgres:// /dbname/DB_NAME/psycopg/5432/database name in frontend files |
+| 13 | no innerHTML / outerHTML / insertAdjacentHTML / document.write / eval / new Function |
+
 ## Not yet implemented
 
-- frontend + live updates (SSE), Binance live feed _(later phases)_
+- live push to the browser (SSE), Binance live feed _(later phases)_

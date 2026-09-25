@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stock Watchlist &amp; Alert System</title>
+  <!-- empty icon: stops the browser requesting /favicon.ico -->
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/api.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Real-Time Stock Market Watchlist &amp; Alert System</h1>
+      <p class="subtitle">BCSE302P Database Systems Lab · FastAPI + PostgreSQL</p>
+    </div>
+    <div class="topbar-controls">
+      <div class="user-select">
+        <label for="user-select">Demo user</label>
+        <select id="user-select" disabled>
+          <option>Loading…</option>
+        </select>
+        <span class="hint">Demo user selector, not a login</span>
+      </div>
+      <button type="button" id="refresh-button" class="button">Refresh</button>
+      <span id="health" class="health health-unknown" role="status">Checking…</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" aria-label="Views">
+      <button type="button" class="nav-link" data-view="dashboard">Dashboard</button>
+      <button type="button" class="nav-link" data-view="watchlists">Watchlists</button>
+      <button type="button" class="nav-link" data-view="rules">Alert Rules</button>
+      <button type="button" class="nav-link" data-view="alerts">Alert History</button>
+      <button type="button" class="nav-link" data-view="instruments">Instruments</button>
+      <button type="button" class="nav-link" data-view="demo">Demo</button>
+    </nav>
+
+    <main class="content">
+      <div id="flash" class="flash" role="status" aria-live="polite" hidden></div>
+
+      <!-- ============================ DASHBOARD ============================ -->
+      <section id="view-dashboard" class="view" aria-labelledby="h-dashboard">
+        <h2 id="h-dashboard">Dashboard</h2>
+        <div class="stats">
+          <div class="stat-card"><span class="stat-label">Watchlists</span><span class="stat-value" id="stat-watchlists">–</span></div>
+          <div class="stat-card"><span class="stat-label">Active alert rules</span><span class="stat-value" id="stat-rules">–</span></div>
+          <div class="stat-card"><span class="stat-label">Recent alerts</span><span class="stat-value" id="stat-alerts">–</span></div>
+          <div class="stat-card"><span class="stat-label">Instruments</span><span class="stat-value" id="stat-instruments">–</span></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Recent alerts</h3>
+            <div id="dashboard-alerts"></div>
+          </div>
+          <div class="card">
+            <h3>Watchlist overview</h3>
+            <div id="dashboard-watchlists"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================ WATCHLISTS ============================ -->
+      <section id="view-watchlists" class="view" aria-labelledby="h-watchlists" hidden>
+        <h2 id="h-watchlists">Watchlists</h2>
+        <form id="watchlist-form" class="card form-row">
+          <div class="field">
+            <label for="watchlist-name">New watchlist name</label>
+            <input id="watchlist-name" name="name" type="text" maxlength="50" required placeholder="e.g. Banking">
+          </div>
+          <button type="submit" class="button primary">Create watchlist</button>
+        </form>
+        <div id="watchlists"></div>
+      </section>
+
+      <!-- ============================ ALERT RULES ============================ -->
+      <section id="view-rules" class="view" aria-labelledby="h-rules" hidden>
+        <h2 id="h-rules">Alert Rules</h2>
+        <form id="rule-form" class="card form-row" novalidate>
+          <div class="field">
+            <label for="rule-instrument">Instrument</label>
+            <select id="rule-instrument" name="instrument_id" required></select>
+          </div>
+          <div class="field">
+            <label for="rule-direction">Direction</label>
+            <select id="rule-direction" name="direction">
+              <option value="ABOVE">ABOVE (price rises to or past)</option>
+              <option value="BELOW">BELOW (price falls to or past)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="rule-threshold">Threshold</label>
+            <input id="rule-threshold" name="threshold" type="text" inputmode="decimal" required placeholder="e.g. 3050.50">
+          </div>
+          <div class="field">
+            <label for="rule-cooldown">Cooldown (seconds)</label>
+            <input id="rule-cooldown" name="cooldown_seconds" type="number" min="0" step="1" value="300" required>
+          </div>
+          <button type="submit" class="button primary">Create rule</button>
+        </form>
+        <p class="note">A rule's instrument, direction and threshold cannot be changed after
+          creation. To change them, disable the rule and create a new one.</p>
+        <div class="card"><div id="rules"></div></div>
+      </section>
+
+      <!-- ============================ ALERT HISTORY ============================ -->
+      <section id="view-alerts" class="view" aria-labelledby="h-alerts" hidden>
+        <h2 id="h-alerts">Alert History</h2>
+        <div class="card form-row">
+          <div class="field">
+            <label for="alerts-filter">Instrument</label>
+            <select id="alerts-filter"><option value="">All instruments</option></select>
+          </div>
+          <p class="note">Rows come from the alert_events table, recorded by PostgreSQL
+            when a tick crossed a rule's threshold. Newest first, last 50.</p>
+        </div>
+        <div class="card"><div id="alerts"></div></div>
+      </section>
+
+      <!-- ============================ INSTRUMENTS ============================ -->
+      <section id="view-instruments" class="view" aria-labelledby="h-instruments" hidden>
+        <h2 id="h-instruments">Instruments</h2>
+        <div class="card form-row">
+          <div class="field">
+            <label for="instrument-search">Search</label>
+            <input id="instrument-search" type="search" placeholder="Symbol or name">
+          </div>
+          <div class="field">
+            <label for="instrument-exchange">Exchange</label>
+            <select id="instrument-exchange">
+              <option value="">ALL</option>
+              <option value="NSE">NSE</option>
+              <option value="BSE">BSE</option>
+              <option value="BINANCE">BINANCE</option>
+            </select>
+          </div>
+        </div>
+        <div class="card"><div id="instruments"></div></div>
+        <div id="instrument-detail" class="card" hidden></div>
+      </section>
+
+      <!-- ============================ DEMO ============================ -->
+      <section id="view-demo" class="view" aria-labelledby="h-demo" hidden>
+        <h2 id="h-demo">Demo / Manual Tick</h2>
+        <p class="note">Sends one price tick to <code>POST /ticks/ingest</code>. The server calls
+          the PostgreSQL function <code>ingest_tick()</code> with source MANUAL. That function
+          stores the tick, rejects duplicates, and fires alert rules. The browser only sends
+          the tick.</p>
+        <form id="tick-form" class="card form-row" novalidate>
+          <div class="field">
+            <label for="tick-pick">Pick instrument</label>
+            <select id="tick-pick"><option value="">Choose…</option></select>
+          </div>
+          <div class="field">
+            <label for="tick-exchange">Exchange</label>
+            <input id="tick-exchange" name="exchange" type="text" maxlength="20" required>
+          </div>
+          <div class="field">
+            <label for="tick-symbol">Symbol</label>
+            <input id="tick-symbol" name="symbol" type="text" maxlength="20" required>
+          </div>
+          <div class="field">
+            <label for="tick-price">Price</label>
+            <input id="tick-price" name="price" type="text" inputmode="decimal" required placeholder="e.g. 3060.50">
+          </div>
+          <div class="field">
+            <label for="tick-volume">Volume (optional)</label>
+            <input id="tick-volume" name="volume" type="text" inputmode="decimal" placeholder="blank = unknown">
+          </div>
+          <button type="submit" class="button primary">Send tick</button>
+          <button type="button" id="tick-resend" class="button" disabled>Resend last tick</button>
+        </form>
+        <div id="tick-result" class="card" hidden></div>
+        <div class="card info">
+          <h3>Offline replay</h3>
+          <p>The replay feed runs from the terminal, not from the browser:</p>
+          <pre><code>python -m app.replay data/replay_prices.csv --delay-ms 300</code></pre>
+          <p>Press <strong>Refresh</strong> here to see the ticks and alerts it creates.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

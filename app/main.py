@@ -2,6 +2,7 @@
 
 Run (project root, venv active):
     uvicorn app.main:app --reload
+Web UI:           http://127.0.0.1:8000/          (app/static, Phase 8)
 Interactive docs: http://127.0.0.1:8000/docs
 
 PostgreSQL remains the source of truth. This layer only:
@@ -12,11 +13,13 @@ Constraints, ingest_tick(), the alert trigger, cooldowns and duplicate
 protection all stay inside PostgreSQL.
 """
 
+from pathlib import Path as FilePath
 from typing import Annotated
 
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from psycopg import sql
 from pydantic import AwareDatetime
 
@@ -30,6 +33,29 @@ app = FastAPI(
     version="1.0.0",
 )
 app.add_exception_handler(psycopg.Error, database_error_handler)
+
+# Web UI (plain HTML/CSS/JS). The browser only calls the API routes below;
+# it never talks to PostgreSQL.
+STATIC_DIR = FilePath(__file__).resolve().parent / "static"
+# no-cache = the browser re-checks the file (cheap ETag request) instead of
+# reusing a stale copy after the files change
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+
+class StaticFilesNoCache(StaticFiles):
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.update(NO_CACHE)
+        return response
+
+
+app.mount("/static", StaticFilesNoCache(directory=STATIC_DIR), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    return FileResponse(STATIC_DIR / "index.html", headers=NO_CACHE)
+
 
 Conn = Annotated[psycopg.Connection, Depends(get_conn)]
 Id = Annotated[int, Path(gt=0, le=2**63 - 1)]
