@@ -1,6 +1,7 @@
 -- =====================================================================
 -- verify_spec.sql
--- Compares the LIVE PostgreSQL catalog against docs/PHASE1_SPEC.md.
+-- Compares the LIVE PostgreSQL catalog against docs/PHASE1_SPEC.md
+-- (tables + constraints) and the approved Phase 4 functions/triggers.
 -- Read-only. Every expected fact is written below as data, then diffed
 -- against pg_catalog. Any mismatch is printed; psql exits non-zero if
 -- anything differs.
@@ -140,19 +141,51 @@ WHERE l.conname IS NULL OR e.conname IS NULL
    OR e.tbl <> l.tbl OR e.def <> l.def;
 
 -- ---------------------------------------------------------------------
--- 3. Objects that must NOT exist yet (Phase 2/3 scope)
+-- 3. Functions, triggers and extra indexes (Phase 4 state)
+--    Exactly these public functions and user triggers must exist, with
+--    these exact definitions; no index beyond those created by PK/UNIQUE.
 -- ---------------------------------------------------------------------
-\echo '===== 3. Unexpected objects: triggers, functions, non-constraint indexes (expect 0 rows) ====='
-SELECT 'trigger' AS kind, tgname::TEXT AS name FROM pg_trigger
- WHERE NOT tgisinternal AND tgrelid::regclass::TEXT IN
-   ('users','instruments','watchlists','watchlist_items','price_ticks','alert_rules','alert_events')
+CREATE TEMP TABLE expected_objects (kind TEXT, name TEXT, def TEXT);
+INSERT INTO expected_objects VALUES
+ ('function', 'ingest_tick',
+  'ingest_tick(p_exchange text, p_symbol text, p_observed_at timestamp with time zone, p_price numeric, p_volume numeric, p_source text, p_source_event_id text) RETURNS TABLE(status text, tick_id bigint)'),
+ ('function', 'evaluate_price_alerts',        'evaluate_price_alerts() RETURNS trigger'),
+ ('function', 'check_alert_event_instrument', 'check_alert_event_instrument() RETURNS trigger'),
+ ('trigger',  'trg_price_ticks_evaluate_alerts',
+  'CREATE TRIGGER trg_price_ticks_evaluate_alerts AFTER INSERT ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION evaluate_price_alerts()'),
+ ('trigger',  'trg_alert_events_check_instrument',
+  'CREATE TRIGGER trg_alert_events_check_instrument BEFORE INSERT OR UPDATE OF rule_id, tick_id ON public.alert_events FOR EACH ROW EXECUTE FUNCTION check_alert_event_instrument()');
+
+CREATE TEMP VIEW live_objects AS
+SELECT 'function' AS kind, p.proname::TEXT AS name,
+       p.proname || '(' || pg_get_function_arguments(p.oid) || ') RETURNS '
+                 || pg_get_function_result(p.oid) AS def
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
 UNION ALL
-SELECT 'function', proname::TEXT FROM pg_proc WHERE pronamespace = 'public'::regnamespace
+SELECT 'trigger', t.tgname::TEXT, pg_get_triggerdef(t.oid)
+FROM pg_trigger t
+WHERE NOT t.tgisinternal
+  AND t.tgrelid::regclass::TEXT IN
+      ('users','instruments','watchlists','watchlist_items','price_ticks','alert_rules','alert_events')
 UNION ALL
-SELECT 'index', indexrelid::regclass::TEXT FROM pg_index i
- WHERE indrelid::regclass::TEXT IN
-   ('users','instruments','watchlists','watchlist_items','price_ticks','alert_rules','alert_events')
-   AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid);
+SELECT 'index', i.indexrelid::regclass::TEXT, pg_get_indexdef(i.indexrelid)
+FROM pg_index i
+WHERE i.indrelid::regclass::TEXT IN
+      ('users','instruments','watchlists','watchlist_items','price_ticks','alert_rules','alert_events')
+  AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid);
+
+\echo '===== 3. Function / trigger / extra-index mismatches (expect 0 rows) ====='
+SELECT coalesce(e.kind, l.kind) AS kind, coalesce(e.name, l.name) AS name,
+       CASE WHEN l.name IS NULL THEN 'MISSING in live DB'
+            WHEN e.name IS NULL THEN 'EXTRA in live DB'
+            ELSE 'DIFFERENT' END AS problem,
+       e.def AS expected_def, l.def AS live_def
+FROM expected_objects e
+FULL JOIN live_objects l ON l.kind = e.kind AND l.name = e.name
+WHERE l.name IS NULL OR e.name IS NULL OR e.def <> l.def;
+
+\echo '===== 3b. Functions and triggers present ====='
+SELECT kind, name, def FROM live_objects WHERE kind <> 'index' ORDER BY kind, name;
 
 -- ---------------------------------------------------------------------
 -- 4. Relationship cardinalities derived from the catalog (for the ER)
@@ -193,19 +226,16 @@ BEGIN
     FROM expected_constraints e FULL JOIN live_constraints l ON l.conname = e.conname
     WHERE l.conname IS NULL OR e.conname IS NULL OR e.tbl <> l.tbl OR e.def <> l.def;
 
-    SELECT count(*) INTO n_obj FROM (
-        SELECT 1 FROM pg_trigger WHERE NOT tgisinternal AND tgrelid::regclass::TEXT IN
-          ('users','instruments','watchlists','watchlist_items','price_ticks','alert_rules','alert_events')
-        UNION ALL SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
-        UNION ALL SELECT 1 FROM pg_index i WHERE indrelid::regclass::TEXT IN
-          ('users','instruments','watchlists','watchlist_items','price_ticks','alert_rules','alert_events')
-          AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid)) x;
+    SELECT count(*) INTO n_obj
+    FROM expected_objects e FULL JOIN live_objects l ON l.kind = e.kind AND l.name = e.name
+    WHERE l.name IS NULL OR e.name IS NULL OR e.def <> l.def;
 
-    RAISE NOTICE 'columns checked: %, constraints checked: %',
-        (SELECT count(*) FROM expected_columns), (SELECT count(*) FROM expected_constraints);
+    RAISE NOTICE 'columns checked: %, constraints checked: %, functions/triggers checked: %',
+        (SELECT count(*) FROM expected_columns), (SELECT count(*) FROM expected_constraints),
+        (SELECT count(*) FROM expected_objects);
     IF n_col + n_con + n_obj > 0 THEN
-        RAISE EXCEPTION 'SPEC MISMATCH: % column, % constraint, % unexpected object differences',
+        RAISE EXCEPTION 'SPEC MISMATCH: % column, % constraint, % function/trigger/index differences',
             n_col, n_con, n_obj;
     END IF;
-    RAISE NOTICE 'LIVE SCHEMA MATCHES docs/PHASE1_SPEC.md';
+    RAISE NOTICE 'LIVE SCHEMA MATCHES docs/PHASE1_SPEC.md (tables, constraints, Phase 4 functions/triggers)';
 END $$;

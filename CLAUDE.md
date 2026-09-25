@@ -31,7 +31,10 @@ matter more than frontend polish.
 - Driver: psycopg 3, direct parameterized SQL (no ORM)
 - Frontend: plain HTML + CSS + vanilla JavaScript
 - Realtime to browser: Server-Sent Events (unless WebSocket is concretely needed)
-- Version control: Git
+- Version control: Git — managed MANUALLY by me. Claude must NEVER run any
+  git or gh command (add, commit, push, pull, fetch, merge, rebase, reset,
+  checkout/switch, remote, config) or change git identity/settings. I
+  commit and push myself after approving each phase.
 
 Do NOT introduce: React, Next.js, Node backend, SQLAlchemy, MongoDB, Redis,
 Docker, microservices, Kubernetes, ML, trading/order execution, Kafka/Flink,

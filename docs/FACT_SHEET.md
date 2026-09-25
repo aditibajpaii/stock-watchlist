@@ -2,7 +2,7 @@
 
 Factual notes only. Not report text — write your own sentences.
 Every value below was taken from the running database or from the SQL
-files. Status: **Phase 3 (normalization + ER evidence) complete**. Items
+files. Status: **Phase 4 (ingestion + alert engine) complete**. Items
 marked _(later phase)_ do not exist yet.
 
 ---
@@ -259,8 +259,11 @@ Counterexamples accepted by the schema (rolled-back test, 2026-09-25):
 ## Live schema verification (Phase 3)
 
 - Script: sql/verify_spec.sql (read-only; diffs catalog vs PHASE1_SPEC)
-- Result 2026-09-25: 37/37 columns match, 36/36 constraints match,
-  0 triggers, 0 functions, 0 non-constraint indexes
+- Result 2026-09-25 (Phase 3): 37/37 columns match, 36/36 constraints
+  match, 0 triggers, 0 functions, 0 non-constraint indexes
+- Since Phase 4 the script also checks the 3 functions + 2 triggers by exact
+  definition, and that no extra index exists. Result after Phase 4:
+  37/37 columns, 36/36 constraints, 5/5 functions+triggers match
 - Self-check: with 1 nullability change, 1 dropped CHECK and 1 extra index
   on a scratch DB, all 3 differences reported and psql exited non-zero
 
@@ -287,20 +290,127 @@ uq_alert_events_rule_tick.
 | alert_rules | 6 (5 active, 1 inactive) |
 | alert_events | 0 |
 
+## Ingestion and alert engine (Phase 4, sql/03_functions_triggers.sql)
+
+### PostgreSQL objects
+
+| Object | Kind | Attached to | Timing |
+|---|---|---|---|
+| ingest_tick(p_exchange text, p_symbol text, p_observed_at timestamptz, p_price numeric, p_volume numeric, p_source text, p_source_event_id text) RETURNS TABLE(status text, tick_id bigint) | function (PL/pgSQL) | – | called by clients |
+| evaluate_price_alerts() | trigger function | – | – |
+| trg_price_ticks_evaluate_alerts | trigger | price_ticks | AFTER INSERT, FOR EACH ROW |
+| check_alert_event_instrument() | trigger function | – | – |
+| trg_alert_events_check_instrument | trigger | alert_events | BEFORE INSERT OR UPDATE OF rule_id, tick_id, FOR EACH ROW |
+
+### ingest_tick
+
+- Official operational insertion path (replay / Binance / manual)
+- Input identifies instrument by (exchange, symbol)
+- Returns 1 row: ('INSERTED', tick_id) or ('DUPLICATE', NULL)
+- Unknown instrument → error SQLSTATE SW001
+- Inactive instrument → error SQLSTATE SW002 (nothing stored)
+- Lock: `SELECT … FROM instruments … FOR NO KEY UPDATE`, taken BEFORE the
+  tick insert; held until the caller's transaction ends
+- Same instrument → callers serialized; different instruments → parallel
+- FOR NO KEY UPDATE does not block FK checks (they take FOR KEY SHARE)
+- Duplicate handling: `INSERT … ON CONFLICT ON CONSTRAINT
+  uq_price_ticks_source_event DO NOTHING RETURNING tick_id`
+- Duplicate → no row inserted → alert trigger does not fire
+- Isolation level: READ COMMITTED (server default); no isolation check in code
+
+### Alert evaluation (evaluate_price_alerts, per inserted tick N)
+
+| Step | Rule |
+|---|---|
+| Late tick | exists tick of same instrument with observed_at > N.observed_at → N stored, NOT evaluated |
+| Equal observed_at | not late; order broken by tick_id |
+| Previous tick | greatest (observed_at, tick_id) strictly below N's, same instrument |
+| First tick | no previous → no alert |
+| Rules evaluated | alert_rules WHERE instrument_id = N.instrument_id AND is_active |
+| ABOVE fires | previous.price < threshold AND N.price >= threshold |
+| BELOW fires | previous.price > threshold AND N.price <= threshold |
+| Edge-triggered | staying above/below → no further events |
+| Cooldown basis | observed_at of the tick behind the rule's latest event (market time; NOT fired_at) |
+| Cooldown suppress | N.observed_at < last_fired_observed_at + cooldown_seconds |
+| Cooldown boundary | crossing at exactly last + cooldown fires |
+| Suppressed crossing | dropped, not retried |
+| Event insert | `INSERT INTO alert_events (rule_id, tick_id) … ON CONFLICT ON CONSTRAINT uq_alert_events_rule_tick DO NOTHING` |
+| NOTIFY | only if an event row was inserted; channel `alert_events`; payload = event_id as text |
+| Rollback | tick, events and queued NOTIFY all discarded |
+
+### Integrity trigger (check_alert_event_instrument)
+
+- Rejects an alert_events row whose rule's instrument ≠ tick's instrument
+- Error: SQLSTATE 23514 (check_violation), constraint name
+  `trg_alert_events_check_instrument`
+- Covers INSERT and UPDATE of rule_id / tick_id
+- Missing rule/tick left to the FKs (23503)
+- alert_events still has no instrument_id column
+
+### Custom SQLSTATEs
+
+| Code | Raised by | Meaning |
+|---|---|---|
+| SW001 | ingest_tick | unknown instrument (exchange, symbol) |
+| SW002 | ingest_tick | instrument is inactive |
+| 23514 + `trg_alert_events_check_instrument` | integrity trigger | rule/tick instrument mismatch |
+
+## Build / run order
+
+1. sql/00_schema.sql
+2. sql/01_seed.sql
+3. sql/03_functions_triggers.sql
+4. tests: sql/02_schema_tests.sql, sql/verify_spec.sql,
+   sql/04_alert_tests.sql, tests/concurrency_test.sh
+5. demo (rolled back): sql/05_demo_queries.sql
+
 ## Tests executed
 
-- File: sql/02_schema_tests.sql
-- Result (2026-09-25, PostgreSQL 18.6): **51 / 51 PASS**
-- Groups: A unique (12), B check (16), C foreign key (8),
-  D restrict (5), E cascade (10)
+All results 2026-09-25, PostgreSQL 18.6, after a clean rebuild (00 → 01 → 03).
+
+| Suite | File | Result |
+|---|---|---|
+| Schema constraints (Phase 2) | sql/02_schema_tests.sql | **51 / 51 PASS** |
+| Live schema vs spec (Phase 3) | sql/verify_spec.sql | **MATCH** (37 columns, 36 constraints, 5 functions/triggers) |
+| Alert engine (Phase 4) | sql/04_alert_tests.sql | **50 / 50 PASS** |
+| Multi-session concurrency + NOTIFY (Phase 4) | tests/concurrency_test.sh | **17 / 17 PASS** (3 consecutive runs) |
+
+Phase 2 schema tests:
+- Groups: A unique (12), B check (16), C foreign key (8), D restrict (5),
+  E cascade (10)
 - Each negative test checks the exact SQLSTATE AND constraint name
-- Runs inside one transaction, rolled back → seed unchanged afterwards
-- Harness self-check: with a CHECK and a CASCADE deliberately broken on a
-  scratch DB, 7 tests reported FAIL and psql exited non-zero
+- Runs in one transaction, rolled back → seed unchanged
+- Harness self-check: CHECK + CASCADE deliberately broken on scratch DB →
+  7 FAIL, non-zero exit
+- Phase 4 change: fixture's manual alert_events insert got
+  `ON CONFLICT … DO NOTHING` (trigger now creates that event itself);
+  no assertion changed
+
+Phase 4 alert tests (50 checks) cover:
+- first tick; ABOVE crossing 2990→2999→3001; staying above; re-cross after
+  cooldown; BELOW crossing; staying below; ABOVE/BELOW equality; cooldown
+  suppression, retry-free suppression, after-cooldown, exact boundary;
+  cooldown uses observed_at; duplicate source event; same observed_at;
+  late tick; wrong-instrument INSERT and UPDATE; inactive rule; inactive
+  and unknown instrument; top-level and savepoint rollback; manual
+  duplicate alert_event; one tick firing 3 rules; global consistency
+- Test instruments/users/rules created inside a rolled-back transaction
+- Mutation self-check on scratch DB:
+  - level-triggered bug → 5 FAIL
+  - late-tick check removed → 3 FAIL
+  - integrity trigger dropped → 2 FAIL
+
+Concurrency test (separate psql processes on throwaway DB
+stock_watchlist_ctest, dropped afterwards):
+
+| Scenario | Observed |
+|---|---|
+| 1 A holds RELIANCE lock 3 s, B ingests same instrument | B blocked ≈ 2.0 s; pg_blocking_pids shows B blocked by A; wait_event Lock:transactionid; order base < A < B; B's previous = A; exactly 1 alert (on A) |
+| 2 CONTROL: same race via direct INSERT (no lock) | B not blocked (≈ 0.01 s); **2 alerts for 1 crossing** → proves the race is real and the lock prevents it |
+| 3 A holds ETHUSDT lock; B has older observed_at | B blocked ≈ 2.0 s, then classified late: stored, no event; exactly 1 alert |
+| 4 LISTEN session + committed crossing + rolled-back crossing + duplicate | exactly 1 notification, payload = committed event_id; rolled-back crossing left 0 ticks / 0 events |
 
 ## Not yet implemented
 
-- ingest_tick function, alert trigger, alert_events integrity trigger,
-  pg_notify _(Phase 4)_
-- replay _(Phase 5)_, index benchmark _(Phase 6)_, web app _(Phase 7)_,
-  Binance _(Phase 8)_
+- replay _(Phase 5)_, index benchmark _(Phase 6)_, web app + SSE
+  _(Phase 7)_, Binance _(Phase 8)_

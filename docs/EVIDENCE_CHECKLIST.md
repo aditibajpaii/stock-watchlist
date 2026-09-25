@@ -180,10 +180,11 @@ text from these.
       event, not the timestamp.
 - [ ] **27_fd-table** — not a screenshot. The team builds the per-table
       FD / candidate key / NF table from NORMALIZATION_NOTES.md §8.
-- [ ] _(Phase 4)_ **28_no-duplication-join.png** — alert_events joined
-      to price_ticks and instruments, showing price, time and symbol are
-      obtained via tick_id, not stored twice. This needs real alert
-      events, so it comes in Phase 4.
+- [ ] **28_no-duplication-join.png** — any DEMO 1 or DEMO 3 event
+      table from `sql/05_demo_queries.sql` (screenshots 34/36). The
+      event row shows symbol, price and observed_at, all obtained by
+      joining through tick_id; alert_events itself stores only
+      (event_id, rule_id, tick_id, fired_at).
 
 ## Marks → evidence map
 
@@ -193,9 +194,130 @@ text from these.
 | Tables + description + screenshots (5) | 03, 04, 05a–11a (CREATE TABLE ×7), 05b–11b (`\d` ×7) | 02, 12, 13, 14–16, 17, 18–22 |
 | Normal forms (2) | 27 (FD/NF table from notes), 24 | 23, 25, 26, 28 |
 
+## Phase 4 – Ingestion and alert engine (strong extra evidence)
+
+The template has no dedicated marks for triggers. This evidence supports
+"Tables and Constraints" (the database doing the work) and the Review
+Evaluation / viva.
+
+### Definitions
+
+- [ ] **30_functions-list.png** — in psql: `\df`
+      (3 rows: ingest_tick, evaluate_price_alerts, check_alert_event_instrument)
+- [ ] **31_ingest_tick-def.png** — in psql: `\sf ingest_tick`
+      (or open sql/03_functions_triggers.sql, section 3)
+- [ ] **32_alert-trigger-def.png** — in psql: `\sf evaluate_price_alerts`
+- [ ] **33_integrity-trigger-def.png** — in psql:
+      `\sf check_alert_event_instrument`
+- [ ] **33b_trigger-list.png** — in psql:
+      ```sql
+      SELECT tgname, tgrelid::regclass AS on_table, pg_get_triggerdef(oid)
+      FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1;
+      ```
+      or `\d price_ticks` and `\d alert_events` (see the "Triggers:" section)
+
+### Behaviour (one script, fully rolled back, safe to repeat)
+
+`psql -d stock_watchlist -f sql/05_demo_queries.sql`
+
+| Screenshot | Section of the output |
+|---|---|
+| [ ] **34_above-alert-fires.png** | DEMO 1 — 2990 then 3005 → one ABOVE event |
+| [ ] **35_no-repeat-while-above.png** | DEMO 2 — 3010, 3020 → still one event |
+| [ ] **36_cooldown.png** | DEMO 3 — re-cross after 19 s suppressed; re-cross after 329 s fires (2 events) |
+| [ ] **37_duplicate-input.png** | DEMO 4 — status DUPLICATE, 1 tick with that id, total events unchanged |
+| [ ] **38_late-tick.png** | DEMO 5 — 09:14:00 tick stored (first row by time), no BELOW event |
+| [ ] **39_integrity-error.png** | DEMO 6 — ERROR "rule 1 is for instrument 1, but tick … is for instrument 6" |
+| [ ] **40_rollback.png** | DEMO 7 — 10 ticks / 2 events inside, 0 / 0 after ROLLBACK |
+
+### Automated test results
+
+- [ ] **41_alert-tests.png** —
+      `psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/04_alert_tests.sql`
+      (results table + "50 | 0 | 50")
+- [ ] **42_concurrency-script.png** — `bash tests/concurrency_test.sh`
+      (4 scenarios, "ALL CONCURRENCY CHECKS PASSED"). It uses its own
+      throwaway DB and does not touch stock_watchlist.
+- [ ] **43_verify-spec-phase4.png** —
+      `psql -d stock_watchlist -f sql/verify_spec.sql`, section 3b and the
+      final NOTICE
+
+### Two-terminal lock demonstration (manual, for screenshots 44–46)
+
+Uses a separate demo database, so the dev seed data is never changed.
+
+**SETUP (any terminal, once):**
+```sh
+export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
+cd "/Users/aditi/dbms project"
+dropdb --if-exists stock_watchlist_demo
+createdb stock_watchlist_demo
+psql -q -d stock_watchlist_demo -v ON_ERROR_STOP=1 \
+     -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql
+psql -d stock_watchlist_demo -c "SELECT * FROM ingest_tick('NSE','RELIANCE','2026-01-05 09:15:00+05:30',2990,100,'MANUAL','demo:base');"
+```
+
+**TERMINAL A**
+```sh
+psql -d stock_watchlist_demo
+```
+```sql
+\set PROMPT1 'TERMINAL-A %# '
+BEGIN;
+SELECT * FROM ingest_tick('NSE','RELIANCE','2026-01-05 09:15:01+05:30',3005,100,'MANUAL','demo:A');
+-- returns INSERTED. Do NOT commit yet; the RELIANCE row lock is held.
+```
+
+**TERMINAL B**
+```sh
+psql -d stock_watchlist_demo
+```
+```sql
+\set PROMPT1 'TERMINAL-B %# '
+BEGIN;
+SELECT * FROM ingest_tick('NSE','RELIANCE','2026-01-05 09:15:02+05:30',3010,100,'MANUAL','demo:B');
+-- HANGS here: B is waiting for A's lock.
+```
+- [ ] **44_terminal-B-waiting.png** — both terminals side by side, B hanging
+
+**TERMINAL C (optional observer, while B hangs)**
+```sh
+psql -d stock_watchlist_demo
+```
+```sql
+SELECT pid, state, wait_event_type, wait_event, pg_blocking_pids(pid) AS blocked_by,
+       left(query, 60) AS query
+FROM pg_stat_activity
+WHERE datname = 'stock_watchlist_demo' AND pid <> pg_backend_pid();
+LISTEN alert_events;
+```
+- [ ] **45_blocking-pids.png** — B shows wait_event_type = Lock,
+      wait_event = transactionid, blocked_by = {A's pid}
+
+**TERMINAL A**
+```sql
+COMMIT;
+```
+**TERMINAL B** — the SELECT now returns INSERTED immediately. Then:
+```sql
+COMMIT;
+SELECT e.event_id, t.source_event_id, t.price, t.observed_at
+FROM alert_events e JOIN price_ticks t USING (tick_id) ORDER BY e.event_id;
+-- exactly ONE event, on demo:A. B saw A's 3005 as its previous price.
+```
+**TERMINAL C** — type `SELECT 1;` and psql prints
+`Asynchronous notification "alert_events" with payload "1" received …`
+(only A's committed event).
+- [ ] **46_after-commit.png** — B's result, the single event and C's
+      notification
+
+**CLEANUP**, after quitting all three with `\q`:
+```sh
+dropdb stock_watchlist_demo
+```
+
 ## Later phases (not yet available)
 
-- [ ] _(Phase 4)_ alert trigger/function source; alert firing; rollback test
 - [ ] _(Phase 6)_ EXPLAIN ANALYZE before/after index
-- [ ] _(Phase 7)_ watchlist UI; fired-alert UI; DB Inspector
-- [ ] _(Phase 9)_ concurrency demo (optional)
+- [ ] _(Phase 7)_ watchlist UI; fired-alert UI; DB Inspector; live alert via SSE
+- [ ] _(Phase 9)_ SERIALIZABLE demonstration (optional)

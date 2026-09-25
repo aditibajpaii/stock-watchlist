@@ -105,14 +105,18 @@ VALUES (pg_temp.iid('NSE', 'RELIANCE'), '2026-09-25 10:00:00+05:30', 2990.00, 10
        (pg_temp.iid('NSE', 'RELIANCE'), '2026-09-25 10:00:01+05:30', 3005.00, 150, 'REPLAY', 'test:000002'),
        (pg_temp.iid('NSE', 'TCS'),      '2026-09-25 10:00:00+05:30', 3600.00, NULL, 'REPLAY', 'test:000003');
 
--- arjun's "RELIANCE ABOVE 3000" rule fired on the 3005 tick
+-- arjun's "RELIANCE ABOVE 3000" rule fired on the 3005 tick.
+-- Since Phase 4 the alert trigger already creates this event when the
+-- ticks above are inserted; ON CONFLICT keeps the fixture valid with or
+-- without the trigger.
 INSERT INTO alert_events (rule_id, tick_id)
 SELECT r.rule_id, t.tick_id
 FROM alert_rules r
 JOIN price_ticks t ON t.source = 'REPLAY' AND t.source_event_id = 'test:000002'
 WHERE r.user_id = pg_temp.uid('arjun')
   AND r.instrument_id = pg_temp.iid('NSE', 'RELIANCE')
-  AND r.direction = 'ABOVE';
+  AND r.direction = 'ABOVE'
+ON CONFLICT ON CONSTRAINT uq_alert_events_rule_tick DO NOTHING;
 
 \o /dev/null
 -- (test calls return nothing useful; results are printed at the end)
