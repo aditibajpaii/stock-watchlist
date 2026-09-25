@@ -266,6 +266,7 @@ ingest_tick(p_exchange, p_symbol, p_observed_at, p_price, p_volume,
 
 ## Indexes
 
+- (Final state: this is still the only extra index; built in Phase 6.)
 - The only intended index committed so far is
   `price_ticks (instrument_id, observed_at DESC, tick_id DESC)`, created
   in Phase 6.

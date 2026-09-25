@@ -2,6 +2,67 @@
 
 Screenshots for the official report. Take them in a terminal with a
 readable font and a window wide enough that psql output does not wrap.
+**Start with the FINAL MUST-HAVE list below.** Everything after it is
+optional extra evidence, organised by phase. Never fake a screenshot:
+each one must come from your own run.
+
+## FINAL MUST-HAVE SCREENSHOTS (15 items)
+
+Before starting: `bash scripts/reset_demo_db.sh` (clean database), and
+`uvicorn app.main:app --reload` in another terminal for the web and API
+items. Details for each ID are in the section named in the last column.
+
+| # | ID | What it shows | Command / where | Details |
+|---|---|---|---|---|
+| 1 | **01_er-diagram.png** | ER diagram (3 marks) | docs/ER_DIAGRAM.md mermaid block → mermaid.live → export | §5 |
+| 2 | **05a–11a / 05b–11b** | CREATE TABLE + `\d <table>` for each of the 7 tables: 14 small images (the report template asks for both per table) | editor on sql/00_schema.sql; `psql -d stock_watchlist -c '\d users'` … | §6.2 |
+| 3 | **13_fk-on-delete.png** | all PK/FK/UNIQUE/CHECK names; the 8 FKs with CASCADE/RESTRICT | `psql -d stock_watchlist -f sql/inspect_schema.sql` | §6.3 |
+| 4 | **17_schema-tests.png** | constraints really reject bad data: 51/51 PASS | `psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/02_schema_tests.sql` | §6.5 |
+| 5 | **25_fd-counterexamples.png** | normalization: rejected FDs really are false (symbol not a key; exchange ↛ quote_currency) | rolled-back SQL block | Normal forms |
+| 6 | **30_functions-list.png + 33b_trigger-list.png** | stored function + triggers: `\df` (ingest_tick, evaluate_price_alerts, check_alert_event_instrument) and the 2 triggers | `psql -d stock_watchlist -c '\df'`; trigger query in Phase 4 → Definitions | Phase 4 |
+| 7 | **42_concurrency-script.png** | transactions/locking: the lock prevents a double alert (the control run without the lock shows 2) | `bash tests/concurrency_test.sh` | Phase 4 |
+| 8 | **80_ui-dashboard.png** | web app over the database: counts, recent alerts, watchlists | browser, after the replay (item 11) | Phase 8 |
+| 9 | **81_ui-watchlists.png** | watchlists with latest prices (LEFT JOIN LATERAL) | browser → Watchlists | Phase 8 |
+| 10 | **83_ui-alert-rules.png** | ABOVE/BELOW rules, ACTIVE/DISABLED | browser → Alert Rules | Phase 8 |
+| 11 | **51_replay-run.png** | deterministic alert firing: 30 inserted, 8 ALERT lines | `python -m app.replay data/replay_prices.csv --delay-ms 300 --run-id demo1` | Phase 5 |
+| 12 | **87_ui-alert-history.png** | durable alert history (alert_events + joins) | browser → Alert History | Phase 8 |
+| 13 | **70_swagger.png** | REST API: 18 endpoints | http://127.0.0.1:8000/docs (needs internet for the page design) | Phase 7 |
+| 14 | **62_explain-before.png + 65_explain-after.png** | index + EXPLAIN ANALYZE: latest-50 Sort + Bitmap 9.461 ms → Index Scan 0.020 ms | benchmark run, or the saved plans in docs/benchmark_results/plans_baseline.txt and plans_btree.txt | Phase 6 |
+| 15 | **110_full-regression.png** | every suite passing | `bash scripts/run_all_tests.sh` (ends `ALL SUITES PASSED`) | Phase 9 |
+
+**Optional (take only if time allows):**
+- **52_replay-duplicate.png**: the same run_id again → 0 inserted, 30
+  duplicate (idempotency).
+- **85_ui-manual-tick.png**: manual crossing from the Demo view.
+- **108_db-inspector.png**: `psql -d stock_watchlist -f sql/08_inspect_live.sql`.
+- **23_schema-matches-spec.png**: live schema = approved spec.
+- **101_live-feed-running.png** and **102_binance-ticks-sql.png**: the
+  live Binance feed (internet; see Phase 9).
+- **68_brin.png**: B-tree vs BRIN.
+- **46_after-commit.png**: two-terminal lock demonstration.
+
+After the screenshots: `bash scripts/reset_demo_db.sh`.
+
+## DBMS topic → evidence map
+
+| Topic | Evidence (screenshot IDs) | Source of truth |
+|---|---|---|
+| ER design, relationships, cardinality | 01, 01b, 01c, 16 | docs/ER_DIAGRAM.md |
+| Tables | 03, 04, 05a–11a, 05b–11b | sql/00_schema.sql |
+| Primary keys (incl. composite) | 05b–11b, 24 | FACT_SHEET "Tables" |
+| Foreign keys + ON DELETE | 13, 20, 21, 22 | FACT_SHEET "Foreign keys" |
+| UNIQUE constraints | 12, 18, 37 | sql/02_schema_tests.sql group A |
+| CHECK constraints | 12, 19 | group B |
+| Normalization (1NF–BCNF, FDs, candidate keys) | 23, 24, 25, 26, 27 (FD table from notes), 28 | docs/NORMALIZATION_NOTES.md |
+| Stored function | 30, 31 | sql/03_functions_triggers.sql |
+| Triggers | 32, 33, 33b, 34–39 | sql/04_alert_tests.sql (50) |
+| Transactions / rollback | 40, 46, 55 | VIVA note 14 |
+| Concurrency / row locking | 42, 44–46 | tests/concurrency_test.sh (17) |
+| Indexes | 63, 64, 66, 67 | sql/06_indexes.sql |
+| EXPLAIN ANALYZE, before/after, BRIN | 62, 65, 68 | docs/INDEX_BENCHMARK.md |
+| Joins (incl. LATERAL) | 16, 28, 72, 76, 87 | app/main.py queries |
+| CRUD | 74 (create), 77 (update rejected for immutable fields), 82–84 (UI create/duplicate/delete) | docs/API.md |
+| Database-backed application | 80–89, 70, 51, 101 | docs/FRONTEND.md, docs/DEMO_GUIDE.md |
 
 ## One-time setup (every new terminal)
 
@@ -257,7 +318,7 @@ cd "/Users/aditi/dbms project"
 dropdb --if-exists stock_watchlist_demo
 createdb stock_watchlist_demo
 psql -q -d stock_watchlist_demo -v ON_ERROR_STOP=1 \
-     -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql
+     -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
 psql -d stock_watchlist_demo -c "SELECT * FROM ingest_tick('NSE','RELIANCE','2026-01-05 09:15:00+05:30',2990,100,'MANUAL','demo:base');"
 ```
 
@@ -336,12 +397,13 @@ pip install -r requirements.txt
 
 ### Clean demo database (recommended before a classroom demo)
 
-This resets stock_watchlist to seed data, destroying replay and demo
-ticks, so a replay produces exactly 8 alerts:
+This resets stock_watchlist to seed data (plus functions, triggers and
+the index), destroying replay and demo ticks, so a replay produces
+exactly 8 alerts:
 ```sh
-psql -q -d stock_watchlist -v ON_ERROR_STOP=1 \
-     -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql
+bash scripts/reset_demo_db.sh
 ```
+(= `psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql -f sql/06_indexes.sql`)
 
 ### Screenshots
 

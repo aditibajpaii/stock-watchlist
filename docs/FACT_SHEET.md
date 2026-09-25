@@ -2,8 +2,43 @@
 
 Factual notes only. Not report text — write your own sentences.
 Every value below was taken from the running database or from the SQL
-files. Status: **Phase 9 (optional Binance live feed) complete**. Items
-marked _(later phase)_ do not exist yet.
+files. Status: **project complete (Phases 0–10); architecture frozen.**
+The sections after the snapshot keep the per-phase details and the dates
+they were measured.
+
+---
+
+## FINAL SNAPSHOT (2026-09-25)
+
+| Item | Value |
+|---|---|
+| DBMS | PostgreSQL 18.6 (Homebrew), database `stock_watchlist`, time zone Asia/Kolkata, READ COMMITTED |
+| Python | 3.13.15; psycopg 3.3.6, FastAPI 0.141.1, Uvicorn 0.54.0, Pydantic 2.13.5, websockets 17.1, httpx 0.28.1 (tests) |
+| Architecture | Browser (HTML/CSS/JS) → FastAPI → PostgreSQL. CSV replay (app/replay.py) and optional Binance live feed (app/live_feed.py) → ingest_tick() → PostgreSQL |
+| Tables | 7: users, instruments, watchlists, watchlist_items, price_ticks, alert_rules, alert_events (37 columns, all BCNF) |
+| Named constraints | 36 = 7 PK + 8 FK + 7 UNIQUE + 14 CHECK (plus NOT NULLs) |
+| ON DELETE | 4 CASCADE (user-owned), 4 RESTRICT (market/reference data) |
+| Functions | ingest_tick() (PL/pgSQL), evaluate_price_alerts() (trigger function), check_alert_event_instrument() (trigger function) |
+| Triggers | trg_price_ticks_evaluate_alerts (AFTER INSERT on price_ticks, per row); trg_alert_events_check_instrument (BEFORE INSERT/UPDATE OF rule_id, tick_id on alert_events) |
+| Indexes | 15: 14 from PK/UNIQUE + ix_price_ticks_instrument_time (instrument_id, observed_at DESC, tick_id DESC), B-tree, sql/06_indexes.sql |
+| Clean seed counts | 3 users, 7 instruments (5 NSE, 2 BINANCE), 5 watchlists, 11 watchlist items, 6 alert rules (5 active), 0 price_ticks, 0 alert_events |
+| Replay demo (clean DB) | `--run-id demo1`: 30 inserted, 8 alerts; the same run_id again: 0 inserted, 30 duplicate, 0 alerts |
+| API | 18 endpoints on 15 OpenAPI paths (+ `GET /` for the web UI) |
+| Frontend | 6 views, plain HTML/CSS/JS, no framework/npm/CDN; optional 5 s Live refresh (default OFF) |
+| Live feed | Binance public aggTrade, `wss://data-stream.binance.vision`, no API key; BTCUSDT/ETHUSDT only; source_event_id `aggTrade:<id>`; observed_at = trade time |
+| Index benchmark | 500,000 ticks: latest-50 9.461 ms → 0.020 ms; ingest_tick 30.081 → 0.199 ms/call; BRIN 24 kB tested, not kept |
+| Tests (final run) | 02: 51/51 · verify_spec: MATCH · 04: 50/50 · concurrency: 17/17 · replay 18/18 · index 15/15 · API 32/32 · frontend 14/14 · live feed 24/24 |
+
+Important commands (project root, `source .venv/bin/activate`):
+
+| Task | Command |
+|---|---|
+| Reset to clean seed | `bash scripts/reset_demo_db.sh` (or `psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql -f sql/06_indexes.sql`) |
+| Start API + website | `uvicorn app.main:app --reload` → http://127.0.0.1:8000/ |
+| Offline replay | `python -m app.replay data/replay_prices.csv --delay-ms 300 --run-id demo1` |
+| Live feed (optional) | `python -m app.live_feed --symbols ETHUSDT --max-events 20` |
+| Inspect stored data | `psql -d stock_watchlist -f sql/08_inspect_live.sql` |
+| All tests | `bash scripts/run_all_tests.sh` |
 
 ---
 
@@ -16,7 +51,7 @@ marked _(later phase)_ do not exist yet.
   only as a 24/7 demo data source
 - Not in scope: trading/orders, portfolio accounting, price prediction
 
-## Software actually used (so far)
+## Software used
 
 | Item | Version / detail |
 |---|---|
@@ -415,7 +450,7 @@ Full details: docs/INDEX_BENCHMARK.md; raw data: docs/benchmark_results/
 | app/config.py | DB connection from environment variables |
 | data/replay_prices.csv | deterministic demo feed (30 rows) |
 | data/README.md | row-by-row expected behaviour of the demo feed |
-| requirements.txt | `psycopg[binary]==3.3.6` (only dependency) |
+| requirements.txt | `psycopg[binary]==3.3.6` (the only dependency in Phase 5; later: fastapi, uvicorn, websockets, httpx) |
 | .env.example | documents DB_NAME / DB_HOST / DB_PORT / DB_USER (no secrets) |
 | tests/test_replay.py | 18 automated tests |
 
@@ -735,6 +770,10 @@ psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_see
 
 ## Build / run order
 
+Shortcut for 1–3b: `bash scripts/reset_demo_db.sh`. Shortcut for 4–5
+(all tests): `bash scripts/run_all_tests.sh`. Step-by-step demo:
+docs/DEMO_GUIDE.md.
+
 1. sql/00_schema.sql
 2. sql/01_seed.sql
 3. sql/03_functions_triggers.sql
@@ -771,6 +810,16 @@ All results 2026-09-25, PostgreSQL 18.6, after a clean rebuild (00 → 01 → 03
 | Frontend serving (Phase 8, +1 in Phase 9) | tests/test_frontend.py | **14 / 14 PASS** |
 | Live feed (Phase 9) | tests/test_live_feed.py | **24 / 24 PASS** (no internet) |
 | Browser workflows (Phase 8) | headless Chrome script (not in repo) | **37 / 37 checks** |
+
+Final run after Phase 10 (2026-09-25, `bash scripts/run_all_tests.sh`,
+28.5 s): 02 → 51/51, verify_spec → MATCH, 04 → 50/50, concurrency →
+17/17, replay → 18/18, index → 15/15, API → 32/32, frontend → 14/14,
+live feed → 24/24, ending "ALL SUITES PASSED". The same week, checked
+on throwaway DBs: replay `--run-id demo1` → 30 inserted / 8 alerts, then
+0 inserted / 30 duplicate; manual RELIANCE 2990 → 3010 → 1 alert (rule
+1), 3020 → none, 2990 → none, 3010 within 300 s → none (cooldown);
+full demo order live (20 ETH ticks) → replay (still 8 alerts) → new
+HDFCBANK ABOVE 1700 rule + ticks 1690 → 1710 → 1 alert.
 
 Re-run after Phase 9 (2026-09-25): 02 → 51/51, verify_spec → MATCH,
 04 → 50/50, concurrency → 17/17, replay → 18/18, index → 15/15,
@@ -935,7 +984,8 @@ no internet; throwaway DB stock_watchlist_p9_test per test):
 | 18 | DB error (price > NUMERIC(18,8), 22003) → exit 2, earlier tick kept, failing event rolled back |
 | 19 | malformed messages skipped and counted, never stored |
 
-## Not yet implemented
+## Not built (by decision)
 
-- server push to the browser (SSE/WebSocket): not built by design; optional 5 s polling instead
-- live NSE/BSE prices: not available (replay / manual only)
+- server push to the browser (SSE/WebSocket): optional 5 s polling instead
+- live NSE/BSE prices: replay / manual only
+- authentication, trading, portfolio, extra tables (out of scope)

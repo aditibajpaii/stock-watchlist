@@ -152,16 +152,23 @@ Indexes:
   cover some queries. Further indexes are designed from real queries and
   EXPLAIN output only.
 
-## How to run (current state)
+## How to run (final state; project complete after Phase 10 cleanup)
+
+Status: feature-complete and frozen. Architecture: Browser → FastAPI →
+PostgreSQL; replay (CSV) and optional Binance live feed both →
+ingest_tick() → PostgreSQL. No new tables/features. Step-by-step demo:
+docs/DEMO_GUIDE.md; quick reference: README.md.
 
 - psql: `export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"`; dev DB
-  `stock_watchlist`; rebuild = 00_schema → 01_seed → 03_functions_triggers
-  → 06_indexes
-- Python: project venv `.venv/` (Python 3.13, psycopg 3.3.6 only);
-  replay = `python -m app.replay data/replay_prices.csv`
-- Tests: sql/02_schema_tests.sql, sql/verify_spec.sql, sql/04_alert_tests.sql,
-  `bash tests/concurrency_test.sh`, `python -m unittest tests.test_replay tests.test_indexes -v`
-  (Python/concurrency tests use throwaway DBs; test_indexes reads the dev DB only)
+  `stock_watchlist`; reset = `bash scripts/reset_demo_db.sh` (00_schema →
+  01_seed → 03_functions_triggers → 06_indexes, then checks counts)
+- Python: project venv `.venv/` (Python 3.13; requirements.txt pins psycopg,
+  fastapi, uvicorn, websockets, httpx);
+  replay = `python -m app.replay data/replay_prices.csv --delay-ms 300 --run-id demo1`
+- Tests: `bash scripts/run_all_tests.sh` (all 9 suites in order: 02, verify_spec,
+  04, concurrency, test_replay, test_indexes, test_api, test_frontend,
+  test_live_feed). Python/concurrency tests use throwaway DBs; 02/04 roll
+  back; test_indexes reads the dev DB only
 - Benchmark: `python tests/benchmark_indexes.py` (throwaway
   stock_watchlist_benchmark, 500k rows) + sql/07_benchmark_queries.sql
 - Performance indexes live in sql/06_indexes.sql, never in 00_schema.sql;
@@ -187,8 +194,9 @@ Indexes:
 Phases:
 0 inspect env/repo · 1 requirements + ER/schema · 2 schema + seed + schema
 tests · 3 normalization proof · 4 alert engine + tests · 5 replay ingestion
-· 6 index benchmark · 7 minimal web app · 8 Binance feed · 9 optional
-concurrency demo / BRIN · 10 evidence audit + fact sheet + viva prep
+· 6 index benchmark · 7 FastAPI backend · 8 web frontend · 9 optional
+Binance live feed · 10 final cleanup + demo guide + viva prep (all done;
+the original plan's order changed as the phases were approved)
 
 For each phase: explain goal, inspect files first, show plan, implement
 only that phase, run code/tests, fix failures, report what actually passed,

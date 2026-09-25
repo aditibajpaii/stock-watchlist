@@ -4,8 +4,170 @@ Study material for the oral exam, not report text. Each entry has:
 WHY (the plain reason), VIVA (a likely question) and ANSWER (a short
 answer to understand, not memorise).
 
-Schema and normalization Q&A: docs/NORMALIZATION_NOTES.md §9 and the Phase
-3 quiz. This file covers Phase 4, the ingestion path and the alert engine.
+Order: the top-15 list, then schema/constraints (S1–S10), then the
+alert engine (0–15), replay (16–25), indexing (26–38), API (39–50),
+frontend (51–60) and live feed (61–70). Longer normalization worked
+examples: docs/NORMALIZATION_NOTES.md §9. Every number here comes from
+our own tests or benchmark.
+
+---
+
+## Top 15 to know cold
+
+| # | Question | Where |
+|---|---|---|
+| 1 | Why 7 tables, and what does each hold? | S1 |
+| 2 | What normal form is the schema in, and how do you know? | S3 |
+| 3 | Why doesn't alert_events store price or symbol? | S4 |
+| 4 | PK vs UNIQUE; why the composite PK on watchlist_items? | S5, S6 |
+| 5 | CASCADE vs RESTRICT: which FKs use which, and why? | S8 |
+| 6 | What does "edge-triggered" mean? ABOVE/BELOW rules exactly? | 6 |
+| 7 | Why no alert on the first tick? | 7 |
+| 8 | Cooldown: why observed_at, not fired_at? | 9 |
+| 9 | What stops duplicate ticks and duplicate alerts? | 10, 64 |
+| 10 | What is a late tick and what happens to it? | 8 |
+| 11 | What race does the instrument lock prevent? Why not a plain INSERT? | 1, 2 |
+| 12 | READ COMMITTED: what does it mean here? | 5 |
+| 13 | Why this index and column order? What did EXPLAIN ANALYZE show? | 29, 32, 35 |
+| 14 | Why does the browser call FastAPI, not PostgreSQL? Why parameterized SQL? | 53, 41 |
+| 15 | What if Binance/internet fails in the viva? | 66 |
+
+---
+
+## S. Schema, normalization and constraints (short spoken answers)
+
+### S1. Why 7 tables?
+
+VIVA: "Why these tables and not more or fewer?"
+ANSWER: One table per real thing or relationship:
+- **users**: who. **instruments**: what can be watched, identified by
+  (exchange, symbol).
+- **watchlists**: named lists owned by a user.
+- **watchlist_items**: the M:N link between watchlists and instruments.
+- **price_ticks**: market events, one row per price.
+- **alert_rules**: a user's condition ("RELIANCE ABOVE 3000").
+- **alert_events**: each time a rule actually fired on a tick.
+
+Left out on purpose:
+- **latest_price**: derivable from price_ticks with the index (note 56).
+- **alert_state**: not needed. The previous tick is found with the
+  index, and every hard case (concurrency, ties, late ticks, cooldown,
+  duplicates) passed the Phase 4 tests without it.
+- **asset_class column**: would break 3NF (S3).
+
+### S2. Candidate keys
+
+VIVA: "What are the candidate keys of price_ticks / alert_rules?"
+ANSWER (the PK is listed first; the others are UNIQUE constraints):
+- users: {user_id}, {username}, {email}
+- instruments: {instrument_id}, {exchange, symbol}
+- watchlists: {watchlist_id}, {user_id, name}
+- watchlist_items: {watchlist_id, instrument_id}
+- price_ticks: {tick_id}, {source, instrument_id, source_event_id}
+- alert_rules: {rule_id}, {user_id, instrument_id, direction, threshold}
+- alert_events: {event_id}, {rule_id, tick_id}
+
+### S3. What normal form?
+
+VIVA: "Prove the schema is normalized."
+ANSWER:
+- **BCNF, all 7 tables.** In every table, every determinant of a
+  non-trivial FD is a candidate key (FD table in FACT_SHEET, per-table
+  proof in NORMALIZATION_NOTES).
+- **1NF:** atomic values; no lists in a cell (watchlist_items instead of
+  "RELIANCE,TCS").
+- **2NF:** no attribute depends on part of a composite key; e.g. added_at
+  needs both watchlist_id and instrument_id.
+- **3NF/BCNF:** no transitive dependencies. That is why there is no
+  asset_class (exchange → asset_class), no user_id in watchlist_items
+  (watchlist_id → user_id), and no price in alert_events (tick_id → price).
+- **Checked with counterexamples**, e.g. BINANCE has both USDT and BTC
+  quote currencies, so exchange ↛ quote_currency.
+
+### S4. Why doesn't alert_events store price, symbol or observed_at?
+
+VIVA: "Wouldn't copying the price make alert history simpler?"
+ANSWER: tick_id already determines price, observed_at and instrument.
+Copying them adds tick_id → price inside alert_events, a transitive
+dependency, so the table would no longer be in 3NF. The copies could
+disagree with the tick (update anomaly), and they waste space. One join
+gets them back (GET /users/{id}/alerts, sql/08_inspect_live.sql).
+alert_events stays (event_id, rule_id, tick_id, fired_at).
+
+### S5. PK vs UNIQUE
+
+VIVA: "What's the difference, and why does price_ticks have both?"
+ANSWER:
+- **PRIMARY KEY:** the one chosen identifier. Implies NOT NULL, one per
+  table, and it is what FKs reference.
+- **UNIQUE:** enforces the other candidate keys. Both create a B-tree
+  index.
+- price_ticks: PK tick_id (small, stable, one column for alert_events to
+  reference) plus UNIQUE (source, instrument_id, source_event_id), the
+  duplicate detector.
+- All our UNIQUE columns are NOT NULL, so NULL loopholes don't apply.
+
+### S6. Why a composite PK on watchlist_items?
+
+VIVA: "Why no watchlist_item_id?"
+ANSWER: The row *is* the pair (watchlist, instrument). PK
+(watchlist_id, instrument_id) states that fact and blocks adding the same
+instrument twice (the API turns that error into "RELIANCE is already in
+this watchlist."). A surrogate id would still need UNIQUE on the pair,
+and nothing references this table.
+
+### S7. FK and CHECK constraints
+
+VIVA: "Give an example of each and show it working."
+ANSWER:
+- **8 named FKs.** E.g. fk_price_ticks_instrument: a tick for a missing
+  instrument fails with 23503.
+- **14 named CHECKs.** E.g. price > 0, direction IN ('ABOVE','BELOW'),
+  source IN ('REPLAY','BINANCE','MANUAL'), cooldown_seconds >= 0,
+  volume NULL or >= 0.
+- **Proof:** sql/02_schema_tests.sql, 51 tests. Groups: A unique 12,
+  B check 16, C FK 8, D restrict 5, E cascade 10. Each negative test
+  checks the exact SQLSTATE *and* constraint name.
+- **36 named constraints in total:** 7 PK, 8 FK, 7 UNIQUE, 14 CHECK.
+
+### S8. CASCADE vs RESTRICT
+
+VIVA: "What happens when you delete a user? An instrument?"
+ANSWER: Ownership policy.
+- **CASCADE for user-owned data:** users → watchlists → watchlist_items,
+  users → alert_rules → alert_events. Deleting a user removes everything
+  they own.
+- **RESTRICT for shared market data:** instruments → price_ticks /
+  watchlist_items / alert_rules, and price_ticks → alert_events. You
+  can't delete an instrument that has ticks, or a tick that has alerts.
+- **So** deleting a user or a watchlist never deletes price history
+  (tests E3–E8). The UI disables rules rather than deleting them,
+  because deleting a rule cascades to its alert history.
+
+### S9. Why TIMESTAMPTZ and NUMERIC?
+
+VIVA: "Why not FLOAT for prices?"
+ANSWER:
+- **NUMERIC(18,8) is exact decimal.** FLOAT is binary: 0.1 + 0.2 ≠ 0.3,
+  and a threshold compare like 3000.00 >= 3000 must be exact.
+- **End to end:** Python uses Decimal, and JSON carries strings
+  ("0.00000001").
+- **TIMESTAMPTZ stores an absolute instant**, so Binance's UTC trade time
+  and IST display never get confused. Naive timestamps are rejected by
+  the API (422).
+
+### S10. Why is ingestion a function, and what else is enforced where?
+
+VIVA: "Which rules live in the database and which in Python?"
+ANSWER:
+- **In the database:** everything that protects data. That means the
+  constraints, the duplicate check (UNIQUE), the lock and alert logic
+  (ingest_tick plus triggers), and rule/tick instrument consistency
+  (integrity trigger).
+- **In Python:** only earlier, friendlier messages (Pydantic, CSV
+  validation), never the guarantee.
+- **Three design rules are not DB-enforced** (note 46): ingestion only
+  via ingest_tick, immutable rule definitions, append-only ticks.
 
 ---
 
@@ -225,7 +387,7 @@ and harmless; ids are identifiers, not counters.
 | A direct INSERT into price_ticks skips the lock | not an app path; all feeds use ingest_tick (CLAUDE.md rule) |
 | A multi-row INSERT into price_ticks: rows in one statement see each other in the AFTER trigger | benchmark bulk loads disable alerts / use a separate setup (Phase 6) |
 | ingested_at = now() = transaction start time | one tick per transaction in real ingestion, so the values differ in practice |
-| One active feed per instrument | replay = stocks, Binance = crypto |
+| One active feed per instrument | don't run replay and live feed on the same instrument at once (their timelines would make each other's ticks late) |
 | The integrity trigger doesn't watch later edits to alert_rules.instrument_id | rule definition is immutable by design; no edit endpoint |
 
 ---
@@ -298,15 +460,8 @@ Follow-up: "Why doesn't --delay-ms depend on the offsets?"
 
 ### 21. Why is replay useful when a live feed exists?
 
-WHY: a demo must not depend on the internet, market hours or luck.
-VIVA: "Why build a replay at all?"
-ANSWER:
-- It works offline, when markets are closed, and gives the same prices
-  every time, so we know in advance which 8 alerts fire and can test that
-  automatically.
-- A live feed can't guarantee a crossing during a 10-minute viva.
-- Both use the same ingest_tick path, so a working replay also shows the
-  live path works.
+See note 66 (offline, deterministic: always 30 ticks and 8 alerts, same
+ingest_tick path as live).
 
 ### 22. Why still need database constraints if Python validates input?
 
@@ -603,38 +758,15 @@ ANSWER:
 
 ### 42. Why keep alert logic inside PostgreSQL?
 
-WHY: one place, always enforced, atomic with the data.
-VIVA: "Wouldn't it be simpler to check thresholds in Python?"
-ANSWER:
-- The trigger runs in the same transaction as the tick insert, so a tick
-  and its alert commit or roll back together. The instrument row lock
-  serializes concurrent ticks (Phase 4 test: no duplicate alerts).
-- Replay, the API and psql all get identical behaviour, because none of
-  them contains alert code; they all call ingest_tick.
-- In Python, every client would need a copy of the logic and its own
-  locking.
+See note 54.
 
 ### 43. Why no separate latest_price table?
 
-WHY: it would duplicate data that can be derived cheaply.
-VIVA: "Isn't querying price_ticks for the latest price slow?"
-ANSWER:
-- "Latest" is simply the first entry of ix_price_ticks_instrument_time for
-  that instrument: 0.020 ms and 16 buffers for 50 rows on 500k ticks.
-- A latest_price table would store the same fact twice and could get out
-  of sync (another update anomaly), with no measured need.
-- The watchlist endpoint gets every item's latest price in one query
-  with LEFT JOIN LATERAL.
+See note 56.
 
 ### 44. Why does alert history need joins?
 
-WHY: alert_events is normalized: (event_id, rule_id, tick_id, fired_at).
-VIVA: "Where does the API get the price and symbol of an alert?"
-ANSWER: From joins: alert_events → alert_rules (direction, threshold,
-user), → price_ticks (price, observed_at), → instruments (exchange,
-symbol). Storing them in alert_events would create tick_id → price, a
-transitive dependency. Test 20 checks that the stored row still has only
-4 columns while the API returns the full picture.
+See notes S4 and 55.
 
 ### 45. Why does the manual ingest endpoint call ingest_tick?
 
@@ -762,6 +894,10 @@ ANSWER:
   cooldown, late-tick detection and a lock against concurrent ingestion.
   Only the database sees every tick, and the trigger runs inside the
   inserting transaction. We proved this in the Phase 4 concurrency tests.
+- The trigger runs in the same transaction as the tick insert, so a tick
+  and its alert commit or roll back together.
+- Replay, live feed, API and psql all behave identically, because none of
+  them contains alert code.
 - Each open tab computing its own alerts could disagree, fire twice, or
   miss a crossing between refreshes.
 - So the page only *displays* alert_events. The Demo view finds the
@@ -781,7 +917,8 @@ ANSWER:
   table, so nothing is lost if the page was closed.
 - The table stores only (event_id, rule_id, tick_id, fired_at). Symbol,
   threshold, price and observed time come from the joins, so there is no
-  copied data to drift out of sync.
+  copied data to drift out of sync. API test 20 checks that the stored row
+  has only those 4 columns.
 
 ### 56. Why is there no latest_price table?
 
