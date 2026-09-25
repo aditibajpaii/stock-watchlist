@@ -2,8 +2,8 @@
 
 Factual notes only. Not report text — write your own sentences.
 Every value below was taken from the running database or from the SQL
-files. Status: **Phase 2 (base schema) complete**. Items marked
-_(later phase)_ do not exist yet.
+files. Status: **Phase 3 (normalization + ER evidence) complete**. Items
+marked _(later phase)_ do not exist yet.
 
 ---
 
@@ -200,6 +200,24 @@ alert_rules, alert_events
 | alert_rules – alert_events | 1 : N |
 | price_ticks – alert_events | 1 : N (a rule fires at most once per tick) |
 
+## Relationships per table (from pg_constraint)
+
+| Table | References (parent) | Referenced by (child) |
+|---|---|---|
+| users | – | watchlists, alert_rules |
+| instruments | – | watchlist_items, price_ticks, alert_rules |
+| watchlists | users | watchlist_items |
+| watchlist_items | watchlists, instruments | – |
+| price_ticks | instruments | alert_events |
+| alert_rules | users, instruments | alert_events |
+| alert_events | alert_rules, price_ticks | – |
+
+- All 8 relationships: 1 : 0..N; every FK column NOT NULL (child has exactly 1 parent)
+- No FK column is unique on its own → no 1:1 relationships
+- Derived M:N: watchlists ↔ instruments (via watchlist_items);
+  alert_rules ↔ price_ticks (via alert_events, max 1 event per pair)
+- Junction tables: watchlist_items, alert_events
+
 ## Functional dependencies and normal form
 
 | Table | Non-trivial FDs | Highest NF |
@@ -216,7 +234,35 @@ alert_rules, alert_events
 - FDs checked and found FALSE: exchange → quote_currency;
   (source, source_event_id) → instrument_id
 - FD found TRUE and removed by design: exchange → asset_class (column dropped)
-- Formal normalization proof: _(Phase 3)_
+- Detailed analysis: docs/NORMALIZATION_NOTES.md
+
+Composite-key partial-dependency facts:
+- watchlist_items: added_at depends on BOTH watchlist_id and instrument_id
+- watchlists: created_at depends on neither user_id alone nor name alone
+- alert_rules: cooldown/is_active/created_at not determined by any subset
+  of (user_id, instrument_id, direction, threshold)
+- alert_events: fired_at not determined by rule_id alone or tick_id alone
+- price_ticks: no subset of (source, instrument_id, source_event_id)
+  determines observed_at/price/volume/ingested_at
+
+Deliberately NOT stored (would break 2NF/3NF):
+- watchlist_items.user_id (watchlist_id → user_id)
+- alert_events.instrument_id / observed_at / price (tick_id → these)
+- instruments.asset_class (exchange → asset_class)
+
+Counterexamples accepted by the schema (rolled-back test, 2026-09-25):
+- NSE RELIANCE and BSE RELIANCE both valid → symbol alone is not a key
+- BINANCE BTCUSDT (USDT) and BINANCE ETHBTC (BTC) → exchange ↛ quote_currency
+- same instrument + same observed_at + different event id accepted (test A10)
+- same source_event_id on different instruments accepted (test A9)
+
+## Live schema verification (Phase 3)
+
+- Script: sql/verify_spec.sql (read-only; diffs catalog vs PHASE1_SPEC)
+- Result 2026-09-25: 37/37 columns match, 36/36 constraints match,
+  0 triggers, 0 functions, 0 non-constraint indexes
+- Self-check: with 1 nullability change, 1 dropped CHECK and 1 extra index
+  on a scratch DB, all 3 differences reported and psql exited non-zero
 
 ## Indexes (current)
 

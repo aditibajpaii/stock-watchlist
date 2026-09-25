@@ -24,9 +24,29 @@ Suggested filename pattern: `NN_short-name.png` in `docs/screenshots/`.
 
 ## Section 5 – ER Diagram (3 marks)
 
-- [ ] **01_er-diagram.png** — ER diagram (Mermaid from the Phase 1 spec,
-      or redrawn by the report team). Must show all 7 entities, PK/FK,
-      and cardinalities.
+Source: `docs/ER_DIAGRAM.md` (verified against the live catalog).
+
+- [ ] **01_er-diagram.png** — exported image of the Mermaid diagram.
+      Paste the ```mermaid block into https://mermaid.live, then use
+      Actions → PNG. Also export an SVG, which stays sharp when printed.
+      It must show all 7 entities, PK/FK/UK markers, and 8 relationship
+      lines with crow's-foot cardinality.
+- [ ] **01b_er-relationships.png** — relationships proven from the
+      catalog, not drawn by hand:
+      `psql -d stock_watchlist -f sql/verify_spec.sql`
+      Capture section "4. Relationships derived from foreign keys"
+      (8 rows: parent, child, FK, 1 : 0..N, participation, ON DELETE).
+- [ ] **01c_fk-list.png** — the "Foreign keys and ON DELETE" section of
+      `sql/inspect_schema.sql`, as a second source for the same 8 edges.
+
+For the report team:
+- The Mermaid diagram is the verified reference. If you redraw it in
+  another tool (draw.io, Chen notation), check every line against
+  01b. Do not add relationships without an FK; for example, there is NO
+  direct users–instruments link.
+- The two M:N relationships (watchlists–instruments and
+  alert_rules–price_ticks) are shown through the junction tables
+  watchlist_items and alert_events.
 
 ## Section 6 – Tables and Constraints (5 marks)
 
@@ -124,9 +144,54 @@ SELECT count(*) FROM watchlists WHERE user_id = 1;   -- after: 0
 ROLLBACK;
 ```
 
-## Section 6 – Normal forms (2 marks)
+## Normal forms (2 marks)
 
-- [ ] _(Phase 3)_ functional-dependency / normalization evidence
+Source notes: `docs/NORMALIZATION_NOTES.md`. The team writes the report
+text from these.
+
+- [ ] **23_schema-matches-spec.png** — live schema identical to the
+      approved design:
+      `psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/verify_spec.sql`
+      Capture sections 1–3 (empty mismatch tables) and the final NOTICE
+      `LIVE SCHEMA MATCHES docs/PHASE1_SPEC.md`.
+- [ ] **24_composite-keys.png** — the composite keys that 2NF is checked
+      against. In psql:
+      `\d watchlist_items`  (composite PK)
+      `\d alert_rules`      (4-column UNIQUE)
+      `\d price_ticks`      (3-column UNIQUE)
+- [ ] **25_fd-counterexamples.png** — proof that rejected FDs really are
+      false. Run in psql; it rolls back and changes nothing:
+      ```sql
+      BEGIN;
+      INSERT INTO instruments (exchange, symbol, name, quote_currency) VALUES
+        ('BSE','RELIANCE','Reliance Industries Ltd','INR'),
+        ('BINANCE','ETHBTC','Ether / Bitcoin','BTC');
+      SELECT exchange, symbol, quote_currency FROM instruments
+      WHERE symbol IN ('RELIANCE','BTCUSDT','ETHUSDT','ETHBTC')
+      ORDER BY exchange, symbol;
+      SELECT exchange, count(DISTINCT quote_currency) AS currencies
+      FROM instruments GROUP BY exchange;
+      ROLLBACK;
+      ```
+      This shows the symbol repeating across exchanges (symbol is not a
+      key) and BINANCE having 2 currencies (exchange ↛ quote_currency).
+- [ ] **26_timestamp-not-identity.png** — rows A9 and A10 of the
+      schema-test output (screenshot 17), showing identity is the source
+      event, not the timestamp.
+- [ ] **27_fd-table** — not a screenshot. The team builds the per-table
+      FD / candidate key / NF table from NORMALIZATION_NOTES.md §8.
+- [ ] _(Phase 4)_ **28_no-duplication-join.png** — alert_events joined
+      to price_ticks and instruments, showing price, time and symbol are
+      obtained via tick_id, not stored twice. This needs real alert
+      events, so it comes in Phase 4.
+
+## Marks → evidence map
+
+| Marks | Minimum evidence | Strong extra evidence |
+|---|---|---|
+| ER Diagram (3) | 01 | 01b, 01c |
+| Tables + description + screenshots (5) | 03, 04, 05a–11a (CREATE TABLE ×7), 05b–11b (`\d` ×7) | 02, 12, 13, 14–16, 17, 18–22 |
+| Normal forms (2) | 27 (FD/NF table from notes), 24 | 23, 25, 26, 28 |
 
 ## Later phases (not yet available)
 
