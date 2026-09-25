@@ -561,6 +561,157 @@ ANSWER:
 
 ---
 
+## Phase 7 – FastAPI backend
+
+### 39. Why FastAPI?
+
+WHY: small, typed, and gives interactive API documentation for free.
+VIVA: "Why FastAPI and not Flask or Django?"
+ANSWER:
+- Request bodies are declared as Python classes (Pydantic), so bad input
+  is rejected with a clear 422 before any SQL runs.
+- It generates /docs (Swagger) automatically, which lets us demonstrate
+  the API without a frontend.
+- Django brings its own ORM and admin, which we deliberately don't use.
+  Flask would need extra libraries for validation and docs.
+
+### 40. Why no ORM?
+
+WHY: the DBMS work must stay visible and in PostgreSQL.
+VIVA: "Why not SQLAlchemy?"
+ANSWER:
+- An ORM generates SQL for you and tends to move rules into Python
+  classes.
+- Our core logic is database objects: CHECK/UNIQUE/FK constraints,
+  ingest_tick(), triggers, a LATERAL join, a tuned index. Plain SQL shows
+  exactly what runs, e.g. the watchlist query, and matches what we
+  benchmarked with EXPLAIN.
+- Every statement is readable in app/main.py.
+
+### 41. Why parameterized SQL?
+
+WHY: it prevents SQL injection, where user input gets executed as SQL.
+VIVA: "How do you prevent SQL injection?"
+ANSWER:
+- Values are never pasted into the SQL text. They are sent separately as
+  parameters (`%s`), and PostgreSQL treats them purely as data.
+- Optional filters are assembled only from fixed SQL fragments with
+  psycopg's `sql.SQL`.
+- Test 29: `NSE' OR '1'='1` as an exchange filter returns an empty list,
+  and `x'); DROP TABLE users; --` becomes an ordinary watchlist name. The
+  users table is untouched.
+
+### 42. Why keep alert logic inside PostgreSQL?
+
+WHY: one place, always enforced, atomic with the data.
+VIVA: "Wouldn't it be simpler to check thresholds in Python?"
+ANSWER:
+- The trigger runs in the same transaction as the tick insert, so a tick
+  and its alert commit or roll back together. The instrument row lock
+  serializes concurrent ticks (Phase 4 test: no duplicate alerts).
+- Replay, the API and psql all get identical behaviour, because none of
+  them contains alert code; they all call ingest_tick.
+- In Python, every client would need a copy of the logic and its own
+  locking.
+
+### 43. Why no separate latest_price table?
+
+WHY: it would duplicate data that can be derived cheaply.
+VIVA: "Isn't querying price_ticks for the latest price slow?"
+ANSWER:
+- "Latest" is simply the first entry of ix_price_ticks_instrument_time for
+  that instrument: 0.020 ms and 16 buffers for 50 rows on 500k ticks.
+- A latest_price table would store the same fact twice and could get out
+  of sync (another update anomaly), with no measured need.
+- The watchlist endpoint gets every item's latest price in one query
+  with LEFT JOIN LATERAL.
+
+### 44. Why does alert history need joins?
+
+WHY: alert_events is normalized: (event_id, rule_id, tick_id, fired_at).
+VIVA: "Where does the API get the price and symbol of an alert?"
+ANSWER: From joins: alert_events → alert_rules (direction, threshold,
+user), → price_ticks (price, observed_at), → instruments (exchange,
+symbol). Storing them in alert_events would create tick_id → price, a
+transitive dependency. Test 20 checks that the stored row still has only
+4 columns while the API returns the full picture.
+
+### 45. Why does the manual ingest endpoint call ingest_tick?
+
+WHY: one ingestion path with one set of guarantees.
+VIVA: "Your API has a POST /ticks/ingest. Does it INSERT into price_ticks?"
+ANSWER:
+- No. It runs `SELECT status, tick_id FROM ingest_tick(..., 'MANUAL',
+  ...)`, the same function the replay uses. The instrument lock,
+  duplicate detection (DUPLICATE response), unknown/inactive checks
+  (SW001/SW002) and the alert trigger all apply.
+- A direct INSERT would skip the lock (Phase 4 showed that causes
+  duplicate alerts).
+
+### 46. What happens if someone bypasses FastAPI?
+
+WHY: the API is just one client; psql or any other program can connect.
+VIVA: "What happens if someone bypasses FastAPI?"
+ANSWER: The core rules still hold, because they are in PostgreSQL:
+- constraints reject bad values, duplicates and dangling references;
+- the alert trigger fires on every inserted tick;
+- the integrity trigger stops mismatched alert events.
+What Python adds is only friendlier error messages and early rejection.
+
+Three approved *design rules* are not enforced by the database, so a psql
+user could break them:
+- **Ticks go through ingest_tick.** A direct INSERT is still valid data and
+  still fires the alert trigger, but it skips the concurrency lock.
+- **Rule definitions are immutable.** A direct UPDATE of the threshold
+  would succeed. The API simply offers no such operation.
+- **Ticks are append-only.** A direct UPDATE/DELETE of an unreferenced tick
+  would succeed. Ticks referenced by alerts are protected by RESTRICT.
+
+These were deliberate Phase 1/4 decisions: no extra triggers until
+justified.
+
+### 47. Python validation vs database constraints
+
+VIVA: "You validate price > 0 in Pydantic AND in a CHECK. Why both?"
+ANSWER:
+- Pydantic gives the user a clear 422 before touching the database.
+- The CHECK protects the data from every other client.
+- Pydantic doesn't know every database limit: threshold 999999999999
+  passes Pydantic but overflows NUMERIC(18,8). The API returns a readable
+  422 with sqlstate 22003, not a traceback (test 27).
+
+### 48. Transactions in the API
+
+VIVA: "When does the API commit?"
+ANSWER:
+- Each request opens its own connection.
+- Every write, and every read that runs several queries (e.g. "does the
+  user exist?" + fetch), runs inside `with conn.transaction():`. That
+  COMMITs if the block finishes and ROLLs BACK if any error escapes, e.g.
+  a duplicate or an HTTP 404 raised mid-way.
+- No connection is shared between requests.
+
+### 49. Why are prices strings in the JSON?
+
+VIVA: "Why is price "3060.50000000" and not 3060.5?"
+ANSWER: JSON numbers are usually read as binary floats, which can't
+represent many decimals exactly. We keep NUMERIC → Python Decimal → JSON
+string, so every stored digit survives. We also forced plain fixed-point
+formatting after a test caught `0.00000001` being sent as `"1E-8"`.
+
+### 50. Why can't the rule threshold be edited?
+
+VIVA: "How do you stop someone changing a rule's threshold via the API?"
+ANSWER:
+- PATCH accepts only is_active and cooldown_seconds. The request model
+  forbids unknown fields, so `{"threshold": 1}` returns 422, and the
+  UPDATE statement never mentions the definition columns.
+- Reason: past alert events refer to the rule, and editing its threshold
+  would silently change what those events meant.
+- To change a threshold: disable the old rule and create a new one.
+
+---
+
 ## Quick-fire drill
 
 1. Which table row does ingest_tick lock? *The instruments row of that
@@ -588,3 +739,7 @@ ANSWER:
     16 buffers.*
 16. ingest_tick before → after? *30.081 → 0.199 ms per call (500k rows).*
 17. Index size vs table? *19 MB index, 48 MB table; BRIN was 24 kB.*
+18. Start the API? *`uvicorn app.main:app --reload`, docs at /docs.*
+19. Duplicate rule via API → ? *409 with constraint uq_alert_rules_definition.*
+20. Manual ingest endpoint uses? *ingest_tick(..., 'MANUAL', ...); 201 INSERTED / 200 DUPLICATE.*
+21. Deleting a rule via API also deletes? *Its alert_events (ON DELETE CASCADE); ticks stay.*

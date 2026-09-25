@@ -479,7 +479,69 @@ python tests/benchmark_indexes.py        # ~1 min; builds stock_watchlist_benchm
 dropdb stock_watchlist_benchmark
 ```
 
+## Phase 7 – FastAPI backend
+
+### Setup
+```sh
+cd "/Users/aditi/dbms project"
+source .venv/bin/activate
+uvicorn app.main:app --reload            # leave running in TERMINAL 1
+```
+Use TERMINAL 2 for the curl commands below. The Swagger page needs
+internet in the browser, because it loads its UI from cdn.jsdelivr.net.
+
+Tip for a demo with alerts: run a replay first
+(`python -m app.replay data/replay_prices.csv`), so latest prices and
+alert history are not empty.
+
+### Screenshots
+
+- [ ] **70_swagger.png** — browser: http://127.0.0.1:8000/docs (all
+      endpoint groups visible)
+- [ ] **71_health.png** — `curl -s http://127.0.0.1:8000/health`
+      (`{"status":"ok","database":"connected"}`)
+- [ ] **72_watchlists.png** — `curl -s http://127.0.0.1:8000/users/1/watchlists | python -m json.tool`
+      (watchlists with items and latest_price)
+- [ ] **73_latest-price.png** — `curl -s http://127.0.0.1:8000/instruments/1/latest | python -m json.tool`
+- [ ] **74_create-rule.png** — in Swagger ("Try it out") or:
+      ```sh
+      curl -s -X POST http://127.0.0.1:8000/users/2/alert-rules \
+        -H "Content-Type: application/json" \
+        -d '{"instrument_id":1,"direction":"ABOVE","threshold":3050,"cooldown_seconds":60}'
+      ```
+      Run it a second time to capture the 409 with
+      `"constraint":"uq_alert_rules_definition"`.
+- [ ] **75_ingest-crossing.png** — two manual ticks through ingest_tick,
+      stamped with the current time (macOS `date`):
+      ```sh
+      T1=$(date -u +%Y-%m-%dT%H:%M:%SZ); T2=$(date -u -v+5S +%Y-%m-%dT%H:%M:%SZ)
+      curl -s -X POST http://127.0.0.1:8000/ticks/ingest -H "Content-Type: application/json" \
+        -d "{\"exchange\":\"NSE\",\"symbol\":\"RELIANCE\",\"observed_at\":\"$T1\",\"price\":3000,\"source_event_id\":\"viva-001\"}"
+      curl -s -X POST http://127.0.0.1:8000/ticks/ingest -H "Content-Type: application/json" \
+        -d "{\"exchange\":\"NSE\",\"symbol\":\"RELIANCE\",\"observed_at\":\"$T2\",\"price\":3060.5,\"source_event_id\":\"viva-002\"}"
+      ```
+      Resend the second command to show `DUPLICATE`.
+      - Needs no RELIANCE tick newer than now. Right after a replay, whose
+        ticks run up to 7 min 40 s into the future, these ticks would be
+        late and fire nothing: wait, or reset the DB first.
+      - Do NOT use far-future timestamps. They would make later replays
+        refuse to start (late-start guard).
+- [ ] **76_alert-history.png** — `curl -s http://127.0.0.1:8000/users/2/alerts | python -m json.tool`
+      (the joined alert: symbol, threshold, price, observed_at, fired_at)
+- [ ] **77_immutable-rule.png** —
+      `curl -s -X PATCH http://127.0.0.1:8000/alert-rules/1 -H "Content-Type: application/json" -d '{"threshold":1}'`
+      (422 extra_forbidden)
+- [ ] **78_api-tests.png** — `python -m unittest tests.test_api -v`
+      (32 tests OK; uses throwaway databases)
+
+⚠ Screenshots 74–75 write to stock_watchlist. To reset the dev DB to
+seed + index afterwards:
+```sh
+psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql \
+     -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
+```
+
 ## Later phases (not yet available)
 
-- [ ] _(Phase 7)_ watchlist UI; fired-alert UI; DB Inspector; live alert via SSE
+- [ ] _(later)_ watchlist UI; fired-alert UI; DB Inspector; live alert via SSE
 - [ ] _(Phase 9)_ SERIALIZABLE demonstration (optional)

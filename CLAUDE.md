@@ -166,6 +166,9 @@ Indexes:
   stock_watchlist_benchmark, 500k rows) + sql/07_benchmark_queries.sql
 - Performance indexes live in sql/06_indexes.sql, never in 00_schema.sql;
   verify_spec.sql expects exactly ix_price_ticks_instrument_time
+- API: `uvicorn app.main:app --reload` (FastAPI, plain psycopg SQL, no ORM);
+  docs in docs/API.md; tests `python -m unittest tests.test_api -v`
+  (throwaway DBs). Error mapping in app/errors.py by (SQLSTATE, constraint).
 
 ## Working rules
 

@@ -2,7 +2,7 @@
 
 Factual notes only. Not report text — write your own sentences.
 Every value below was taken from the running database or from the SQL
-files. Status: **Phase 6 (indexing + benchmark) complete**. Items
+files. Status: **Phase 7 (FastAPI backend) complete**. Items
 marked _(later phase)_ do not exist yet.
 
 ---
@@ -29,7 +29,9 @@ marked _(later phase)_ do not exist yet.
 | Python | 3.13.15 (project virtual environment `.venv/`) |
 | Database driver | psycopg 3.3.6 (`psycopg[binary]`, bundled libpq 18.0.6) |
 | Python test framework | unittest (standard library, no extra dependency) |
-| Backend / frontend | _(later phase)_ FastAPI; HTML/CSS/JS |
+| Backend | FastAPI 0.141.1, Uvicorn 0.54.0, Pydantic 2.13.5 (Starlette 1.7.0) |
+| API test client | httpx 0.28.1 (FastAPI TestClient) |
+| Frontend | _(later phase)_ HTML/CSS/JS |
 
 ## Tables (7)
 
@@ -516,6 +518,69 @@ Full details: docs/INDEX_BENCHMARK.md; raw data: docs/benchmark_results/
 | 3 | --run-id run-Y immediately | refused, exit 2 (late-start guard) |
 | 4 | --run-id run-Y --start-after-latest | 30 INSERTED, 7 alerts |
 
+## Backend API (Phase 7)
+
+Full endpoint table: docs/API.md
+
+| File | Role |
+|---|---|
+| app/main.py | FastAPI app, 18 endpoints on 15 paths |
+| app/db.py | one short-lived psycopg connection per request (autocommit + explicit transactions) |
+| app/errors.py | PostgreSQL error → HTTP mapping by (SQLSTATE, constraint) |
+| app/schemas.py | Pydantic request/response models |
+| tests/test_api.py | 32 tests, real PostgreSQL |
+
+- Start: `uvicorn app.main:app --reload` → http://127.0.0.1:8000/docs
+- /docs Swagger UI assets load from cdn.jsdelivr.net (browser needs
+  internet); /openapi.json and the API work offline
+- No ORM. Every value is passed as a psycopg parameter; optional filters
+  use psycopg.sql composition
+- Writes: `with conn.transaction()` → COMMIT on success, ROLLBACK on error
+- No authentication (seeded demo users)
+- NUMERIC → JSON string in fixed-point form ("3060.50000000",
+  "0.00000001"); never float
+- TIMESTAMPTZ → ISO 8601 with offset; naive input timestamps rejected
+  (422)
+- Unknown request-body fields rejected (422) → PATCH cannot change
+  user_id / instrument_id / direction / threshold
+- PATCH /alert-rules/{id}: only is_active, cooldown_seconds
+- DELETE /alert-rules/{id}: its alert_events are deleted too (FK CASCADE,
+  approved policy); ticks kept
+- POST /ticks/ingest: calls ingest_tick(..., 'MANUAL', ...); 201
+  INSERTED / 200 DUPLICATE; SW001 → 404, SW002 → 409
+- Latest price: `ORDER BY observed_at DESC, tick_id DESC LIMIT 1` (index);
+  no latest_price table
+- Watchlists with latest prices: one query (LEFT JOIN + LATERAL), not
+  N+1
+- History: most recent `limit` (default 100, max 1000) ticks, returned
+  oldest → newest
+- Alerts: newest first; `limit` default 50, max 500; optional
+  instrument_id
+- Error body: {"detail", "sqlstate", "constraint"}; no traceback / SQL /
+  connection info
+
+| Error source | HTTP |
+|---|---|
+| 23505 unique (uq_watchlists_user_name, pk_watchlist_items, uq_alert_rules_definition) | 409 |
+| 23503 FK on insert (fk_watchlists_user, fk_alert_rules_user/_instrument, fk_watchlist_items_watchlist/_instrument) | 404 |
+| 23001 restrict | 409 |
+| 23514 check, 22003 out of range, 22P02, 23502 | 422 |
+| SW001 unknown instrument | 404 |
+| SW002 inactive instrument | 409 |
+| connection failure | 503 |
+| anything else | 500 (generic message; logged server-side) |
+
+Manual checks performed (2026-09-25, uvicorn + curl):
+- Dev DB (read-only): /health, /users, /instruments?exchange=BINANCE,
+  /users/1/watchlists, /users/1/alert-rules, /instruments/1/latest (404,
+  no ticks), /docs (200)
+- Throwaway DB: create watchlist (201) → add item (201) → duplicate item
+  (409) → create rule RELIANCE ABOVE 3050 (201) → duplicate rule "3050.00"
+  (409) → PATCH threshold (422) → PATCH cooldown (200) → ingest 3000 then
+  3060.50 (201, 201) → resend (200 DUPLICATE) → /users/2/alerts shows 1
+  joined alert → latest = 3060.50 → unknown symbol (404 SW001) → negative
+  price (422) → DELETE rule (204) → alerts [] (cascade)
+
 ## Build / run order
 
 1. sql/00_schema.sql
@@ -527,7 +592,9 @@ Full details: docs/INDEX_BENCHMARK.md; raw data: docs/benchmark_results/
 5. Python: `python3.13 -m venv .venv`,
    `.venv/bin/pip install -r requirements.txt`,
    `python -m unittest tests.test_replay -v`,
-   `python -m unittest tests.test_indexes -v`
+   `python -m unittest tests.test_indexes -v`,
+   `python -m unittest tests.test_api -v`
+5c. API: `uvicorn app.main:app --reload`
 5b. benchmark (throwaway DB): `python tests/benchmark_indexes.py`, then
    `psql -d stock_watchlist_benchmark -f sql/07_benchmark_queries.sql`
 6. demo: `python -m app.replay data/replay_prices.csv --delay-ms 300`,
@@ -545,6 +612,11 @@ All results 2026-09-25, PostgreSQL 18.6, after a clean rebuild (00 → 01 → 03
 | Multi-session concurrency + NOTIFY (Phase 4) | tests/concurrency_test.sh | **17 / 17 PASS** (3 consecutive runs) |
 | Python replay (Phase 5) | tests/test_replay.py | **18 / 18 PASS** (unittest) |
 | Index definition + planner (Phase 6) | tests/test_indexes.py | **15 / 15 PASS** |
+| REST API (Phase 7) | tests/test_api.py | **32 / 32 PASS** |
+
+Re-run after Phase 7 (2026-09-25): 02 → 51/51, verify_spec → MATCH,
+04 → 50/50, concurrency → 17/17, replay → 18/18, index → 15/15,
+API → 32/32. Dev DB unchanged (seed + index).
 
 Re-run after Phase 6 with the index installed (2026-09-25): 02 → 51/51,
 verify_spec → MATCH (37 columns, 36 constraints, 6 functions/triggers/
@@ -625,6 +697,23 @@ Phase 6 index tests (15):
 | 14 | a crossing via ingest_tick still creates exactly 1 alert |
 | 15 | verifier: extra index → EXTRA + non-zero exit; dropped ix → MISSING; restored → passes |
 
+Phase 7 API tests (32, TestClient + real PostgreSQL, fresh DB per test):
+
+| # | Covers |
+|---|---|
+| 01, 01b | /health 200; unreachable DB → /health 503 and /users 503 without leaking details |
+| 02–05 | users list/404/422 id; instruments list, 404, exchange + active_only filters |
+| 06 | latest: 404 instrument, 404 no ticks, tie on observed_at → higher tick_id, late tick ignored |
+| 07–08 | history oldest→newest incl. late tick placement; limit = most recent N; limit 0/1001/abc → 422; time window; naive time → 422; from ≥ to → 422 |
+| 09–14 | create watchlist (trimmed name); duplicate → 409 uq_watchlists_user_name; missing user 404; add item with latest price; duplicate item 409; missing instrument/watchlist 404; remove item 204/404; delete watchlist cascades items, keeps instruments + ticks |
+| 15–19 | create rule (threshold "3100.50000000"); duplicate "3000.00" → 409; disable → crossing creates no event; cooldown change; threshold/direction/instrument_id/user_id in PATCH → 422, row unchanged, no PUT route |
+| 20–25 | alert history joined fields, alert_events row has only 4 columns; ingest INSERTED 201 = row in DB with source MANUAL; DUPLICATE 200; crossing visible in /alerts, newest first, instrument filter, limit, other user sees none; SW001 → 404; SW002 → 409, no tick |
+| 26–27 | invalid values → 422 (negative/zero/NaN price, negative volume, naive time, blank event id, unknown field, bad direction, threshold 0, cooldown −1, id 0, blank/51-char name); DB-only limits (threshold 999999999999, cooldown 3e9) → 422 sqlstate 22003, no traceback |
+| 28 | DELETE rule → its alert_events gone (cascade), ticks kept |
+| 29 | `NSE' OR '1'='1` → []; `x'); DROP TABLE users; --` stored as a name; users intact |
+| 30 | "100123.12345678" and "0.00000001" round-trip exactly; aware timestamps |
+| 31 | /docs 200; /openapi.json has 15 paths |
+
 Concurrency test (separate psql processes on throwaway DB
 stock_watchlist_ctest, dropped afterwards):
 
@@ -637,4 +726,4 @@ stock_watchlist_ctest, dropped afterwards):
 
 ## Not yet implemented
 
-- web app + SSE _(Phase 7)_, Binance _(Phase 8)_
+- frontend + live updates (SSE), Binance live feed _(later phases)_
