@@ -1,0 +1,149 @@
+===== A_latest_50  (median of 7: 9.461 ms; runs: [9.54, 9.45, 9.461, 9.521, 9.576, 9.454, 9.295])
+SELECT tick_id, observed_at, price, volume
+        FROM price_ticks
+        WHERE instrument_id = %(iid)s
+        ORDER BY observed_at DESC, tick_id DESC
+        LIMIT 50
+
+Limit  (cost=8479.58..8479.70 rows=50 width=27) (actual time=9.322..9.327 rows=50.00 loops=1)
+  Buffers: shared hit=6371
+  ->  Sort  (cost=8479.58..8542.08 rows=25000 width=27) (actual time=9.322..9.324 rows=50.00 loops=1)
+        Sort Key: observed_at DESC, tick_id DESC
+        Sort Method: top-N heapsort  Memory: 32kB
+        Buffers: shared hit=6371
+        ->  Bitmap Heap Scan on price_ticks  (cost=1242.60..7649.10 rows=25000 width=27) (actual time=1.466..5.814 rows=25000.00 loops=1)
+              Recheck Cond: (instrument_id = '1'::smallint)
+              Heap Blocks: exact=6094
+              Buffers: shared hit=6371
+              ->  Bitmap Index Scan on uq_price_ticks_source_event  (cost=0.00..1236.35 rows=25000 width=0) (actual time=0.910..0.910 rows=25000.00 loops=1)
+                    Index Cond: (instrument_id = '1'::smallint)
+                    Index Searches: 2
+                    Buffers: shared hit=277
+Planning Time: 0.013 ms
+Execution Time: 9.332 ms
+
+===== B_range_30min  (median of 7: 4.539 ms; runs: [4.583, 4.555, 4.555, 4.539, 4.539, 4.538, 4.527])
+SELECT tick_id, observed_at, price, volume
+        FROM price_ticks
+        WHERE instrument_id = %(iid)s
+          AND observed_at >= %(range_from)s
+          AND observed_at <  %(range_to)s
+        ORDER BY observed_at, tick_id
+
+Sort  (cost=7811.84..7814.07 rows=893 width=27) (actual time=4.525..4.553 rows=900.00 loops=1)
+  Sort Key: observed_at, tick_id
+  Sort Method: quicksort  Memory: 67kB
+  Buffers: shared hit=6371
+  ->  Bitmap Heap Scan on price_ticks  (cost=1236.57..7768.07 rows=893 width=27) (actual time=2.886..4.445 rows=900.00 loops=1)
+        Recheck Cond: (instrument_id = '1'::smallint)
+        Filter: ((observed_at >= '2026-01-05 16:11:39.1+05:30'::timestamp with time zone) AND (observed_at < '2026-01-05 16:41:39.1+05:30'::timestamp with time zone))
+        Rows Removed by Filter: 24100
+        Heap Blocks: exact=6094
+        Buffers: shared hit=6371
+        ->  Bitmap Index Scan on uq_price_ticks_source_event  (cost=0.00..1236.35 rows=25000 width=0) (actual time=0.905..0.905 rows=25000.00 loops=1)
+              Index Cond: (instrument_id = '1'::smallint)
+              Index Searches: 2
+              Buffers: shared hit=277
+Planning Time: 0.016 ms
+Execution Time: 4.584 ms
+
+===== C_previous_tick  (median of 7: 6.017 ms; runs: [6.141, 6.025, 6.007, 6.033, 5.992, 6.017, 5.985])
+SELECT t.price
+        FROM price_ticks t
+        WHERE t.instrument_id = %(iid)s
+          AND (t.observed_at, t.tick_id) < (%(c_observed_at)s, %(c_tick_id)s)
+        ORDER BY t.observed_at DESC, t.tick_id DESC
+        LIMIT 1
+
+Limit  (cost=7833.12..7833.12 rows=1 width=22) (actual time=5.986..5.986 rows=1.00 loops=1)
+  Buffers: shared hit=6371
+  ->  Sort  (cost=7833.12..7864.20 rows=12433 width=22) (actual time=5.986..5.986 rows=1.00 loops=1)
+        Sort Key: observed_at DESC, tick_id DESC
+        Sort Method: top-N heapsort  Memory: 25kB
+        Buffers: shared hit=6371
+        ->  Bitmap Heap Scan on price_ticks t  (cost=1239.45..7770.95 rows=12433 width=22) (actual time=1.434..4.881 rows=12500.00 loops=1)
+              Recheck Cond: (instrument_id = '1'::smallint)
+              Filter: (ROW(observed_at, tick_id) < ROW('2026-01-05 16:11:40.1+05:30'::timestamp with time zone, 250001))
+              Rows Removed by Filter: 12500
+              Heap Blocks: exact=6094
+              Buffers: shared hit=6371
+              ->  Bitmap Index Scan on uq_price_ticks_source_event  (cost=0.00..1236.35 rows=25000 width=0) (actual time=0.894..0.894 rows=25000.00 loops=1)
+                    Index Cond: (instrument_id = '1'::smallint)
+                    Index Searches: 2
+                    Buffers: shared hit=277
+Planning Time: 0.016 ms
+Execution Time: 5.990 ms
+
+===== D_watchlist_latest_prices  (median of 7: 22.88 ms; runs: [23.528, 23.107, 22.949, 22.88, 22.798, 22.708, 22.749])
+SELECT i.symbol, lt.price, lt.observed_at
+        FROM watchlist_items wi
+        JOIN instruments i ON i.instrument_id = wi.instrument_id
+        CROSS JOIN LATERAL (
+            SELECT t.price, t.observed_at
+            FROM price_ticks t
+            WHERE t.instrument_id = wi.instrument_id
+            ORDER BY t.observed_at DESC, t.tick_id DESC
+            LIMIT 1) lt
+        WHERE wi.watchlist_id = %(watchlist_id)s
+        ORDER BY i.symbol
+
+Sort  (cost=62223.73..62223.75 rows=8 width=46) (actual time=22.647..22.649 rows=3.00 loops=1)
+  Sort Key: i.symbol
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=19122
+  ->  Nested Loop  (cost=7788.57..62223.61 rows=8 width=46) (actual time=7.494..22.644 rows=3.00 loops=1)
+        Buffers: shared hit=19122
+        ->  Hash Join  (cost=14.47..30.67 rows=8 width=40) (actual time=0.009..0.013 rows=3.00 loops=1)
+              Hash Cond: (i.instrument_id = wi.instrument_id)
+              Buffers: shared hit=3
+              ->  Seq Scan on instruments i  (cost=0.00..14.90 rows=490 width=40) (actual time=0.003..0.004 rows=20.00 loops=1)
+                    Buffers: shared hit=1
+              ->  Hash  (cost=14.37..14.37 rows=8 width=8) (actual time=0.005..0.005 rows=3.00 loops=1)
+                    Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                    Buffers: shared hit=2
+                    ->  Bitmap Heap Scan on watchlist_items wi  (cost=4.21..14.37 rows=8 width=8) (actual time=0.003..0.004 rows=3.00 loops=1)
+                          Recheck Cond: (watchlist_id = '2'::smallint)
+                          Heap Blocks: exact=1
+                          Buffers: shared hit=2
+                          ->  Bitmap Index Scan on pk_watchlist_items  (cost=0.00..4.21 rows=8 width=0) (actual time=0.002..0.002 rows=3.00 loops=1)
+                                Index Cond: (watchlist_id = '2'::smallint)
+                                Index Searches: 1
+                                Buffers: shared hit=1
+        ->  Limit  (cost=7774.10..7774.10 rows=1 width=22) (actual time=7.543..7.543 rows=1.00 loops=3)
+              Buffers: shared hit=19119
+              ->  Sort  (cost=7774.10..7836.60 rows=25000 width=22) (actual time=7.542..7.542 rows=1.00 loops=3)
+                    Sort Key: t.observed_at DESC, t.tick_id DESC
+                    Sort Method: top-N heapsort  Memory: 25kB
+                    Buffers: shared hit=19119
+                    ->  Bitmap Heap Scan on price_ticks t  (cost=1242.60..7649.10 rows=25000 width=22) (actual time=1.517..5.408 rows=25000.00 loops=3)
+                          Recheck Cond: (instrument_id = wi.instrument_id)
+                          Heap Blocks: exact=18282
+                          Buffers: shared hit=19119
+                          ->  Bitmap Index Scan on uq_price_ticks_source_event  (cost=0.00..1236.35 rows=25000 width=0) (actual time=0.982..0.982 rows=25000.00 loops=3)
+                                Index Cond: (instrument_id = wi.instrument_id)
+                                Index Searches: 8
+                                Buffers: shared hit=837
+Planning Time: 0.069 ms
+Execution Time: 22.659 ms
+
+===== E_late_tick_check  (median of 7: 4.274 ms; runs: [4.301, 4.294, 4.306, 4.274, 4.268, 4.258, 4.264])
+SELECT EXISTS (SELECT 1 FROM price_ticks t
+                       WHERE t.instrument_id = %(iid)s
+                         AND t.observed_at > %(e_observed_at)s)
+
+Result  (cost=3392.68..3392.69 rows=1 width=1) (actual time=4.273..4.273 rows=1.00 loops=1)
+  Buffers: shared hit=6371
+  InitPlan 1
+    ->  Bitmap Heap Scan on price_ticks t  (cost=1236.35..7705.35 rows=3 width=0) (actual time=4.272..4.272 rows=0.00 loops=1)
+          Recheck Cond: (instrument_id = '1'::smallint)
+          Filter: (observed_at > '2026-01-05 23:08:18.1+05:30'::timestamp with time zone)
+          Rows Removed by Filter: 25000
+          Heap Blocks: exact=6094
+          Buffers: shared hit=6371
+          ->  Bitmap Index Scan on uq_price_ticks_source_event  (cost=0.00..1236.35 rows=25000 width=0) (actual time=0.889..0.889 rows=25000.00 loops=1)
+                Index Cond: (instrument_id = '1'::smallint)
+                Index Searches: 2
+                Buffers: shared hit=277
+Planning Time: 0.016 ms
+Execution Time: 4.276 ms
+

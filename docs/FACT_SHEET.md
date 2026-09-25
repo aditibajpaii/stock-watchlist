@@ -2,7 +2,7 @@
 
 Factual notes only. Not report text — write your own sentences.
 Every value below was taken from the running database or from the SQL
-files. Status: **Phase 5 (offline Python replay) complete**. Items
+files. Status: **Phase 6 (indexing + benchmark) complete**. Items
 marked _(later phase)_ do not exist yet.
 
 ---
@@ -271,14 +271,57 @@ Counterexamples accepted by the schema (rolled-back test, 2026-09-25):
 
 ## Indexes (current)
 
-Only indexes created automatically by PK/UNIQUE constraints (14):
-pk_* on all 7 tables; uq_users_username, uq_users_email,
-uq_instruments_exchange_symbol, uq_watchlists_user_name,
-uq_price_ticks_source_event, uq_alert_rules_definition,
-uq_alert_events_rule_tick.
+15 indexes on the 7 tables: 14 created automatically by PK/UNIQUE
+constraints, plus 1 performance index (Phase 6).
 
-- Planned (not created): price_ticks (instrument_id, observed_at DESC,
-  tick_id DESC) _(Phase 6)_
+| Index | Table | Columns | Source |
+|---|---|---|---|
+| pk_* (×7) | each table | its PK | PRIMARY KEY |
+| uq_users_username, uq_users_email | users | (username), (email) | UNIQUE |
+| uq_instruments_exchange_symbol | instruments | (exchange, symbol) | UNIQUE |
+| uq_watchlists_user_name | watchlists | (user_id, name) | UNIQUE |
+| uq_price_ticks_source_event | price_ticks | (source, instrument_id, source_event_id) | UNIQUE |
+| uq_alert_rules_definition | alert_rules | (user_id, instrument_id, direction, threshold) | UNIQUE |
+| uq_alert_events_rule_tick | alert_events | (rule_id, tick_id) | UNIQUE |
+| **ix_price_ticks_instrument_time** | price_ticks | (instrument_id, observed_at DESC, tick_id DESC) | sql/06_indexes.sql |
+
+- ix_price_ticks_instrument_time: B-tree, not unique, not partial;
+  installed on stock_watchlist 2026-09-25
+- It lives in sql/06_indexes.sql, not 00_schema.sql (physical performance
+  choice)
+- Existing index reused for the alert cooldown lookup:
+  uq_alert_events_rule_tick (leading column rule_id)
+- No FK-column indexes added (no measured need)
+
+## Index benchmark (Phase 6) — key facts
+
+Full details: docs/INDEX_BENCHMARK.md; raw data: docs/benchmark_results/
+
+- Throwaway DB stock_watchlist_benchmark; 500,000 rows, 20 instruments
+  × 25,000 ticks
+- Bulk load 7.7 s, benchmark only, with the alert trigger disabled on
+  that DB only
+- Warm cache; median of 7 timed runs after 2 warm-ups;
+  `EXPLAIN (ANALYZE, BUFFERS)`
+
+| Query | Before (median) | After (median) | Buffers before → after |
+|---|---|---|---|
+| A latest 50 ticks | 9.461 ms (Sort + bitmap via uq skip scan) | 0.020 ms (Index Scan, no Sort) | 6,371 → 16 |
+| B 30-min range (900 rows) | 4.539 ms | 0.328 ms (Bitmap + Sort still chosen) | 6,371 → 228 |
+| C previous tick (trigger) | 6.017 ms | 0.007 ms (Index Scan, ROW compare in Index Cond) | 6,371 → 4 |
+| D watchlist latest prices | 22.880 ms | 0.030 ms | 19,122 → 15 |
+| E late-tick check (trigger) | 4.274 ms | 0.004 ms (Index Only Scan) | 6,371 → 3 |
+| ingest_tick with trigger (50 calls) | 30.081 ms/call | 0.199 ms/call | – |
+
+- Inside the trigger at baseline, the late-tick check was a Seq Scan
+  removing 500,001 rows (auto_explain)
+- PostgreSQL 18 skip scan: at baseline the uq index was used for
+  instrument_id (2nd column) with `Index Searches: 2`
+- Sizes: heap 48 MB; new B-tree 19 MB; price_ticks total 100 MB → 120 MB;
+  B-tree build 0.40 s
+- BRIN (observed_at), tested only: 24 kB, build 0.03 s; used only for B
+  (3.166 ms) and E (1.257 ms); not used for A/C/D; **not kept**
+- Results identical (SHA-256) in baseline, B-tree and BRIN stages
 
 ## Seed data (01_seed.sql)
 
@@ -478,11 +521,15 @@ uq_alert_events_rule_tick.
 1. sql/00_schema.sql
 2. sql/01_seed.sql
 3. sql/03_functions_triggers.sql
+3b. sql/06_indexes.sql
 4. SQL tests: sql/02_schema_tests.sql, sql/verify_spec.sql,
    sql/04_alert_tests.sql, tests/concurrency_test.sh
 5. Python: `python3.13 -m venv .venv`,
    `.venv/bin/pip install -r requirements.txt`,
-   `python -m unittest tests.test_replay -v`
+   `python -m unittest tests.test_replay -v`,
+   `python -m unittest tests.test_indexes -v`
+5b. benchmark (throwaway DB): `python tests/benchmark_indexes.py`, then
+   `psql -d stock_watchlist_benchmark -f sql/07_benchmark_queries.sql`
 6. demo: `python -m app.replay data/replay_prices.csv --delay-ms 300`,
    then `sql/05_demo_queries.sql` (rolled back)
 
@@ -497,6 +544,13 @@ All results 2026-09-25, PostgreSQL 18.6, after a clean rebuild (00 → 01 → 03
 | Alert engine (Phase 4) | sql/04_alert_tests.sql | **50 / 50 PASS** |
 | Multi-session concurrency + NOTIFY (Phase 4) | tests/concurrency_test.sh | **17 / 17 PASS** (3 consecutive runs) |
 | Python replay (Phase 5) | tests/test_replay.py | **18 / 18 PASS** (unittest) |
+| Index definition + planner (Phase 6) | tests/test_indexes.py | **15 / 15 PASS** |
+
+Re-run after Phase 6 with the index installed (2026-09-25): 02 → 51/51,
+verify_spec → MATCH (37 columns, 36 constraints, 6 functions/triggers/
+indexes), 04 → 50/50, concurrency → 17/17, replay → 18/18, index → 15/15;
+05 demo OK; replay smoke on a production build (00+01+03+06) → 30
+inserted, 8 alerts.
 
 Re-run after Phase 5 (2026-09-25): 02 → 51/51, verify_spec → MATCH,
 04 → 50/50, concurrency → 17/17, replay → 18/18.
@@ -555,6 +609,22 @@ built from 00 + 01 + 03; dev DB untouched):
 | 14 | DB error (price overflow 22003) at row 2: only row 1 stored; with --continue-on-error row 3 stored and fires alert, exit still 2 |
 | 15 | after a replay, 04_alert_tests.sql (50/50) and 02_schema_tests.sql (51/51) pass on the same DB; replay data untouched |
 
+Phase 6 index tests (15):
+
+| # | Test |
+|---|---|
+| 01–05 | dev DB (read-only): index exists; on price_ticks; btree, not unique, not partial, no expressions; column order (instrument_id, observed_at, tick_id); indoption [0,3,3] = ASC, DESC, DESC; exact definition; it is the only non-constraint index |
+| 06 | dev DB: verify_spec.sql passes (tables/constraints unchanged) |
+| 07 | throwaway DB (60k rows): latest-N uses ix, no Sort, no Seq Scan |
+| 08 | previous-tick: ix with `ROW(observed_at, tick_id) <` in Index Cond, no Sort |
+| 09 | late-tick check uses ix, no Seq Scan |
+| 10 | time range uses ix (Index or Bitmap Index Scan), no Seq Scan |
+| 11 | watchlist latest-price LATERAL uses ix |
+| 12 | auto_explain on a real ingest_tick: both trigger queries use ix |
+| 13 | control: with ix dropped (rolled back) latest-N has a Sort and no ix; all query results identical |
+| 14 | a crossing via ingest_tick still creates exactly 1 alert |
+| 15 | verifier: extra index → EXTRA + non-zero exit; dropped ix → MISSING; restored → passes |
+
 Concurrency test (separate psql processes on throwaway DB
 stock_watchlist_ctest, dropped afterwards):
 
@@ -567,5 +637,4 @@ stock_watchlist_ctest, dropped afterwards):
 
 ## Not yet implemented
 
-- index benchmark _(Phase 6)_, web app + SSE _(Phase 7)_,
-  Binance _(Phase 8)_
+- web app + SSE _(Phase 7)_, Binance _(Phase 8)_

@@ -1,0 +1,566 @@
+{
+  "rows": 500000,
+  "instruments": 20,
+  "runs_per_query": 7,
+  "load_seconds": 7.71,
+  "environment": {
+    "postgres": "PostgreSQL 18.6 (Homebrew) on aarch64-apple-darwin27.0.0, compiled by Apple clang version 21.0.0 (clang-2100.3.34.2), 64-bit",
+    "settings": {
+      "effective_cache_size": "5242888kB",
+      "jit": "on",
+      "max_parallel_workers_per_gather": "2",
+      "random_page_cost": "4",
+      "shared_buffers": "163848kB",
+      "work_mem": "4096kB"
+    },
+    "machine": "macOS-27.0-arm64-arm-64bit-Mach-O arm64",
+    "python": "3.13.15",
+    "psycopg": "3.3.6"
+  },
+  "row_count": 500000,
+  "baseline": {
+    "queries": {
+      "A_latest_50": {
+        "execution_ms_runs": [
+          9.54,
+          9.45,
+          9.461,
+          9.521,
+          9.576,
+          9.454,
+          9.295
+        ],
+        "execution_ms_median": 9.461,
+        "planning_ms_last": 0.014,
+        "nodes": [
+          "Limit",
+          "Sort",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": false,
+        "sort": true,
+        "shared_hit": 6371,
+        "shared_read": 0,
+        "rows_returned": 50.0,
+        "jit": false,
+        "result_rows": 50,
+        "result_sha256": "2db383aff78839ca799f955abe6a49536a91832e40f6558befcf1b42723cb4fd"
+      },
+      "B_range_30min": {
+        "execution_ms_runs": [
+          4.583,
+          4.555,
+          4.555,
+          4.539,
+          4.539,
+          4.538,
+          4.527
+        ],
+        "execution_ms_median": 4.539,
+        "planning_ms_last": 0.016,
+        "nodes": [
+          "Sort",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": false,
+        "sort": true,
+        "shared_hit": 6371,
+        "shared_read": 0,
+        "rows_returned": 900.0,
+        "jit": false,
+        "result_rows": 900,
+        "result_sha256": "3b7fee4bcdca757e0a1e536c4197f600df3c46178542d206da07968224af98cf"
+      },
+      "C_previous_tick": {
+        "execution_ms_runs": [
+          6.141,
+          6.025,
+          6.007,
+          6.033,
+          5.992,
+          6.017,
+          5.985
+        ],
+        "execution_ms_median": 6.017,
+        "planning_ms_last": 0.015,
+        "nodes": [
+          "Limit",
+          "Sort",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": false,
+        "sort": true,
+        "shared_hit": 6371,
+        "shared_read": 0,
+        "rows_returned": 1.0,
+        "jit": false,
+        "result_rows": 1,
+        "result_sha256": "f870a26319c62edad9bbb878b057df521959996ca1cec24943c116671b92fec5"
+      },
+      "D_watchlist_latest_prices": {
+        "execution_ms_runs": [
+          23.528,
+          23.107,
+          22.949,
+          22.88,
+          22.798,
+          22.708,
+          22.749
+        ],
+        "execution_ms_median": 22.88,
+        "planning_ms_last": 0.07,
+        "nodes": [
+          "Sort",
+          "Nested Loop",
+          "Hash Join",
+          "Seq Scan",
+          "Hash",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using pk_watchlist_items",
+          "Limit",
+          "Sort",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": true,
+        "sort": true,
+        "shared_hit": 19122,
+        "shared_read": 0,
+        "rows_returned": 3.0,
+        "jit": false,
+        "result_rows": 3,
+        "result_sha256": "d15eac30891695fb672d5de093173e52fe2657d61099fe0b2fd2574d5bcde3eb"
+      },
+      "E_late_tick_check": {
+        "execution_ms_runs": [
+          4.301,
+          4.294,
+          4.306,
+          4.274,
+          4.268,
+          4.258,
+          4.264
+        ],
+        "execution_ms_median": 4.274,
+        "planning_ms_last": 0.015,
+        "nodes": [
+          "Result",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": false,
+        "sort": false,
+        "shared_hit": 6371,
+        "shared_read": 0,
+        "rows_returned": 1.0,
+        "jit": false,
+        "result_rows": 1,
+        "result_sha256": "59377b8ee2f9771019b2d31112127d8e4d6710aef154f2de48a37adcc030f496"
+      }
+    },
+    "sizes": {
+      "relations": {
+        "pk_price_ticks": {
+          "bytes": 11255808,
+          "pretty": "11 MB"
+        },
+        "price_ticks": {
+          "bytes": 49922048,
+          "pretty": "48 MB"
+        },
+        "uq_price_ticks_source_event": {
+          "bytes": 43802624,
+          "pretty": "42 MB"
+        }
+      },
+      "price_ticks_total": {
+        "bytes": 105029632,
+        "pretty": "100 MB"
+      }
+    },
+    "ingest_tick": {
+      "calls": 50,
+      "median_ms": 30.081,
+      "min_ms": 11.729,
+      "max_ms": 30.948
+    },
+    "params": {
+      "iid": "1",
+      "range_from": "2026-01-05 16:11:39.100000+05:30",
+      "range_to": "2026-01-05 16:41:39.100000+05:30",
+      "c_observed_at": "2026-01-05 16:11:40.100000+05:30",
+      "c_tick_id": "250001",
+      "e_observed_at": "2026-01-05 23:08:18.100000+05:30",
+      "watchlist_id": "2"
+    }
+  },
+  "btree_build_seconds": 0.4,
+  "btree": {
+    "queries": {
+      "A_latest_50": {
+        "execution_ms_runs": [
+          0.02,
+          0.02,
+          0.02,
+          0.02,
+          0.019,
+          0.019,
+          0.019
+        ],
+        "execution_ms_median": 0.02,
+        "planning_ms_last": 0.016,
+        "nodes": [
+          "Limit",
+          "Index Scan using ix_price_ticks_instrument_time"
+        ],
+        "seq_scan": false,
+        "sort": false,
+        "shared_hit": 16,
+        "shared_read": 0,
+        "rows_returned": 50.0,
+        "jit": false,
+        "result_rows": 50,
+        "result_sha256": "2db383aff78839ca799f955abe6a49536a91832e40f6558befcf1b42723cb4fd"
+      },
+      "B_range_30min": {
+        "execution_ms_runs": [
+          0.329,
+          0.326,
+          0.325,
+          0.328,
+          0.328,
+          0.328,
+          0.325
+        ],
+        "execution_ms_median": 0.328,
+        "planning_ms_last": 0.022,
+        "nodes": [
+          "Sort",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using ix_price_ticks_instrument_time"
+        ],
+        "seq_scan": false,
+        "sort": true,
+        "shared_hit": 228,
+        "shared_read": 0,
+        "rows_returned": 900.0,
+        "jit": false,
+        "result_rows": 900,
+        "result_sha256": "3b7fee4bcdca757e0a1e536c4197f600df3c46178542d206da07968224af98cf"
+      },
+      "C_previous_tick": {
+        "execution_ms_runs": [
+          0.008,
+          0.007,
+          0.007,
+          0.007,
+          0.007,
+          0.007,
+          0.007
+        ],
+        "execution_ms_median": 0.007,
+        "planning_ms_last": 0.018,
+        "nodes": [
+          "Limit",
+          "Index Scan using ix_price_ticks_instrument_time"
+        ],
+        "seq_scan": false,
+        "sort": false,
+        "shared_hit": 4,
+        "shared_read": 0,
+        "rows_returned": 1.0,
+        "jit": false,
+        "result_rows": 1,
+        "result_sha256": "f870a26319c62edad9bbb878b057df521959996ca1cec24943c116671b92fec5"
+      },
+      "D_watchlist_latest_prices": {
+        "execution_ms_runs": [
+          0.032,
+          0.03,
+          0.03,
+          0.03,
+          0.029,
+          0.029,
+          0.037
+        ],
+        "execution_ms_median": 0.03,
+        "planning_ms_last": 0.049,
+        "nodes": [
+          "Sort",
+          "Nested Loop",
+          "Hash Join",
+          "Seq Scan",
+          "Hash",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using pk_watchlist_items",
+          "Limit",
+          "Index Scan using ix_price_ticks_instrument_time"
+        ],
+        "seq_scan": true,
+        "sort": true,
+        "shared_hit": 15,
+        "shared_read": 0,
+        "rows_returned": 3.0,
+        "jit": false,
+        "result_rows": 3,
+        "result_sha256": "d15eac30891695fb672d5de093173e52fe2657d61099fe0b2fd2574d5bcde3eb"
+      },
+      "E_late_tick_check": {
+        "execution_ms_runs": [
+          0.005,
+          0.004,
+          0.004,
+          0.004,
+          0.004,
+          0.004,
+          0.004
+        ],
+        "execution_ms_median": 0.004,
+        "planning_ms_last": 0.016,
+        "nodes": [
+          "Result",
+          "Index Only Scan using ix_price_ticks_instrument_time"
+        ],
+        "seq_scan": false,
+        "sort": false,
+        "shared_hit": 3,
+        "shared_read": 0,
+        "rows_returned": 1.0,
+        "jit": false,
+        "result_rows": 1,
+        "result_sha256": "59377b8ee2f9771019b2d31112127d8e4d6710aef154f2de48a37adcc030f496"
+      }
+    },
+    "sizes": {
+      "relations": {
+        "ix_price_ticks_instrument_time": {
+          "bytes": 20307968,
+          "pretty": "19 MB"
+        },
+        "pk_price_ticks": {
+          "bytes": 11255808,
+          "pretty": "11 MB"
+        },
+        "price_ticks": {
+          "bytes": 49930240,
+          "pretty": "48 MB"
+        },
+        "uq_price_ticks_source_event": {
+          "bytes": 43802624,
+          "pretty": "42 MB"
+        }
+      },
+      "price_ticks_total": {
+        "bytes": 125345792,
+        "pretty": "120 MB"
+      }
+    },
+    "ingest_tick": {
+      "calls": 50,
+      "median_ms": 0.199,
+      "min_ms": 0.161,
+      "max_ms": 2.619
+    },
+    "params": {
+      "iid": "1",
+      "range_from": "2026-01-05 16:11:39.100000+05:30",
+      "range_to": "2026-01-05 16:41:39.100000+05:30",
+      "c_observed_at": "2026-01-05 16:11:40.100000+05:30",
+      "c_tick_id": "250001",
+      "e_observed_at": "2026-01-05 23:08:18.100000+05:30",
+      "watchlist_id": "2"
+    }
+  },
+  "brin_build_seconds": 0.03,
+  "brin": {
+    "queries": {
+      "A_latest_50": {
+        "execution_ms_runs": [
+          9.869,
+          9.654,
+          9.508,
+          9.48,
+          9.412,
+          9.379,
+          9.425
+        ],
+        "execution_ms_median": 9.48,
+        "planning_ms_last": 0.016,
+        "nodes": [
+          "Limit",
+          "Sort",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": false,
+        "sort": true,
+        "shared_hit": 6372,
+        "shared_read": 0,
+        "rows_returned": 50.0,
+        "jit": false,
+        "result_rows": 50,
+        "result_sha256": "2db383aff78839ca799f955abe6a49536a91832e40f6558befcf1b42723cb4fd"
+      },
+      "B_range_30min": {
+        "execution_ms_runs": [
+          3.167,
+          3.159,
+          3.166,
+          3.181,
+          3.167,
+          3.142,
+          3.144
+        ],
+        "execution_ms_median": 3.166,
+        "planning_ms_last": 0.018,
+        "nodes": [
+          "Sort",
+          "Bitmap Heap Scan",
+          "BitmapAnd",
+          "Bitmap Index Scan using ix_bench_brin_observed_at",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": false,
+        "sort": true,
+        "shared_hit": 663,
+        "shared_read": 0,
+        "rows_returned": 900.0,
+        "jit": false,
+        "result_rows": 900,
+        "result_sha256": "3b7fee4bcdca757e0a1e536c4197f600df3c46178542d206da07968224af98cf"
+      },
+      "C_previous_tick": {
+        "execution_ms_runs": [
+          6.467,
+          6.186,
+          6.164,
+          6.146,
+          6.122,
+          6.111,
+          6.113
+        ],
+        "execution_ms_median": 6.146,
+        "planning_ms_last": 0.017,
+        "nodes": [
+          "Limit",
+          "Sort",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": false,
+        "sort": true,
+        "shared_hit": 6372,
+        "shared_read": 0,
+        "rows_returned": 1.0,
+        "jit": false,
+        "result_rows": 1,
+        "result_sha256": "f870a26319c62edad9bbb878b057df521959996ca1cec24943c116671b92fec5"
+      },
+      "D_watchlist_latest_prices": {
+        "execution_ms_runs": [
+          24.165,
+          23.754,
+          23.462,
+          23.286,
+          23.149,
+          23.073,
+          23.231
+        ],
+        "execution_ms_median": 23.286,
+        "planning_ms_last": 0.069,
+        "nodes": [
+          "Sort",
+          "Nested Loop",
+          "Hash Join",
+          "Seq Scan",
+          "Hash",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using pk_watchlist_items",
+          "Limit",
+          "Sort",
+          "Bitmap Heap Scan",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": true,
+        "sort": true,
+        "shared_hit": 19123,
+        "shared_read": 0,
+        "rows_returned": 3.0,
+        "jit": false,
+        "result_rows": 3,
+        "result_sha256": "d15eac30891695fb672d5de093173e52fe2657d61099fe0b2fd2574d5bcde3eb"
+      },
+      "E_late_tick_check": {
+        "execution_ms_runs": [
+          1.274,
+          1.257,
+          1.255,
+          1.257,
+          1.262,
+          1.254,
+          1.27
+        ],
+        "execution_ms_median": 1.257,
+        "planning_ms_last": 0.016,
+        "nodes": [
+          "Result",
+          "Bitmap Heap Scan",
+          "BitmapAnd",
+          "Bitmap Index Scan using ix_bench_brin_observed_at",
+          "Bitmap Index Scan using uq_price_ticks_source_event"
+        ],
+        "seq_scan": false,
+        "sort": false,
+        "shared_hit": 358,
+        "shared_read": 0,
+        "rows_returned": 1.0,
+        "jit": false,
+        "result_rows": 1,
+        "result_sha256": "59377b8ee2f9771019b2d31112127d8e4d6710aef154f2de48a37adcc030f496"
+      }
+    },
+    "sizes": {
+      "relations": {
+        "ix_bench_brin_observed_at": {
+          "bytes": 24576,
+          "pretty": "24 kB"
+        },
+        "pk_price_ticks": {
+          "bytes": 11255808,
+          "pretty": "11 MB"
+        },
+        "price_ticks": {
+          "bytes": 49930240,
+          "pretty": "48 MB"
+        },
+        "uq_price_ticks_source_event": {
+          "bytes": 43802624,
+          "pretty": "42 MB"
+        }
+      },
+      "price_ticks_total": {
+        "bytes": 105086976,
+        "pretty": "100 MB"
+      }
+    },
+    "params": {
+      "iid": "1",
+      "range_from": "2026-01-05 16:11:39.100000+05:30",
+      "range_to": "2026-01-05 16:41:39.100000+05:30",
+      "c_observed_at": "2026-01-05 16:11:40.100000+05:30",
+      "c_tick_id": "250001",
+      "e_observed_at": "2026-01-05 23:08:18.100000+05:30",
+      "watchlist_id": "2"
+    }
+  },
+  "identical_results_all_stages": {
+    "A_latest_50": true,
+    "B_range_30min": true,
+    "C_previous_tick": true,
+    "D_watchlist_latest_prices": true,
+    "E_late_tick_check": true
+  }
+}

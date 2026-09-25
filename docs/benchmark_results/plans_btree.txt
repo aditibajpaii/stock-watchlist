@@ -1,0 +1,116 @@
+===== A_latest_50  (median of 7: 0.02 ms; runs: [0.02, 0.02, 0.02, 0.02, 0.019, 0.019, 0.019])
+SELECT tick_id, observed_at, price, volume
+        FROM price_ticks
+        WHERE instrument_id = %(iid)s
+        ORDER BY observed_at DESC, tick_id DESC
+        LIMIT 50
+
+Limit  (cost=0.42..51.93 rows=50 width=27) (actual time=0.005..0.016 rows=50.00 loops=1)
+  Buffers: shared hit=16
+  ->  Index Scan using ix_price_ticks_instrument_time on price_ticks  (cost=0.42..25272.84 rows=24533 width=27) (actual time=0.005..0.013 rows=50.00 loops=1)
+        Index Cond: (instrument_id = '1'::smallint)
+        Index Searches: 1
+        Buffers: shared hit=16
+Planning Time: 0.016 ms
+Execution Time: 0.019 ms
+
+===== B_range_30min  (median of 7: 0.328 ms; runs: [0.329, 0.326, 0.325, 0.328, 0.328, 0.328, 0.325])
+SELECT tick_id, observed_at, price, volume
+        FROM price_ticks
+        WHERE instrument_id = %(iid)s
+          AND observed_at >= %(range_from)s
+          AND observed_at <  %(range_to)s
+        ORDER BY observed_at, tick_id
+
+Sort  (cost=2562.45..2564.76 rows=924 width=27) (actual time=0.269..0.297 rows=900.00 loops=1)
+  Sort Key: observed_at, tick_id
+  Sort Method: quicksort  Memory: 67kB
+  Buffers: shared hit=228
+  ->  Bitmap Heap Scan on price_ticks  (cost=32.20..2516.93 rows=924 width=27) (actual time=0.039..0.187 rows=900.00 loops=1)
+        Recheck Cond: ((instrument_id = '1'::smallint) AND (observed_at >= '2026-01-05 16:11:39.1+05:30'::timestamp with time zone) AND (observed_at < '2026-01-05 16:41:39.1+05:30'::timestamp with time zone))
+        Heap Blocks: exact=221
+        Buffers: shared hit=228
+        ->  Bitmap Index Scan on ix_price_ticks_instrument_time  (cost=0.00..31.97 rows=924 width=0) (actual time=0.030..0.030 rows=900.00 loops=1)
+              Index Cond: ((instrument_id = '1'::smallint) AND (observed_at >= '2026-01-05 16:11:39.1+05:30'::timestamp with time zone) AND (observed_at < '2026-01-05 16:41:39.1+05:30'::timestamp with time zone))
+              Index Searches: 1
+              Buffers: shared hit=7
+Planning Time: 0.023 ms
+Execution Time: 0.327 ms
+
+===== C_previous_tick  (median of 7: 0.007 ms; runs: [0.008, 0.007, 0.007, 0.007, 0.007, 0.007, 0.007])
+SELECT t.price
+        FROM price_ticks t
+        WHERE t.instrument_id = %(iid)s
+          AND (t.observed_at, t.tick_id) < (%(c_observed_at)s, %(c_tick_id)s)
+        ORDER BY t.observed_at DESC, t.tick_id DESC
+        LIMIT 1
+
+Limit  (cost=0.42..2.43 rows=1 width=22) (actual time=0.005..0.005 rows=1.00 loops=1)
+  Buffers: shared hit=4
+  ->  Index Scan using ix_price_ticks_instrument_time on price_ticks t  (cost=0.42..24850.54 rows=12359 width=22) (actual time=0.004..0.005 rows=1.00 loops=1)
+        Index Cond: ((instrument_id = '1'::smallint) AND (ROW(observed_at, tick_id) < ROW('2026-01-05 16:11:40.1+05:30'::timestamp with time zone, 250001)))
+        Index Searches: 1
+        Buffers: shared hit=4
+Planning Time: 0.018 ms
+Execution Time: 0.007 ms
+
+===== D_watchlist_latest_prices  (median of 7: 0.03 ms; runs: [0.032, 0.03, 0.03, 0.03, 0.029, 0.029, 0.037])
+SELECT i.symbol, lt.price, lt.observed_at
+        FROM watchlist_items wi
+        JOIN instruments i ON i.instrument_id = wi.instrument_id
+        CROSS JOIN LATERAL (
+            SELECT t.price, t.observed_at
+            FROM price_ticks t
+            WHERE t.instrument_id = wi.instrument_id
+            ORDER BY t.observed_at DESC, t.tick_id DESC
+            LIMIT 1) lt
+        WHERE wi.watchlist_id = %(watchlist_id)s
+        ORDER BY i.symbol
+
+Sort  (cost=42.42..42.44 rows=8 width=46) (actual time=0.023..0.023 rows=3.00 loops=1)
+  Sort Key: i.symbol
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=15
+  ->  Nested Loop  (cost=14.89..42.30 rows=8 width=46) (actual time=0.012..0.021 rows=3.00 loops=1)
+        Buffers: shared hit=15
+        ->  Hash Join  (cost=14.47..30.67 rows=8 width=40) (actual time=0.005..0.007 rows=3.00 loops=1)
+              Hash Cond: (i.instrument_id = wi.instrument_id)
+              Buffers: shared hit=3
+              ->  Seq Scan on instruments i  (cost=0.00..14.90 rows=490 width=40) (actual time=0.001..0.002 rows=20.00 loops=1)
+                    Buffers: shared hit=1
+              ->  Hash  (cost=14.37..14.37 rows=8 width=8) (actual time=0.003..0.003 rows=3.00 loops=1)
+                    Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                    Buffers: shared hit=2
+                    ->  Bitmap Heap Scan on watchlist_items wi  (cost=4.21..14.37 rows=8 width=8) (actual time=0.002..0.002 rows=3.00 loops=1)
+                          Recheck Cond: (watchlist_id = '2'::smallint)
+                          Heap Blocks: exact=1
+                          Buffers: shared hit=2
+                          ->  Bitmap Index Scan on pk_watchlist_items  (cost=0.00..4.21 rows=8 width=0) (actual time=0.001..0.001 rows=3.00 loops=1)
+                                Index Cond: (watchlist_id = '2'::smallint)
+                                Index Searches: 1
+                                Buffers: shared hit=1
+        ->  Limit  (cost=0.42..1.43 rows=1 width=22) (actual time=0.004..0.004 rows=1.00 loops=3)
+              Buffers: shared hit=12
+              ->  Index Scan using ix_price_ticks_instrument_time on price_ticks t  (cost=0.42..25289.02 rows=25000 width=22) (actual time=0.004..0.004 rows=1.00 loops=3)
+                    Index Cond: (instrument_id = wi.instrument_id)
+                    Index Searches: 3
+                    Buffers: shared hit=12
+Planning Time: 0.052 ms
+Execution Time: 0.030 ms
+
+===== E_late_tick_check  (median of 7: 0.004 ms; runs: [0.005, 0.004, 0.004, 0.004, 0.004, 0.004, 0.004])
+SELECT EXISTS (SELECT 1 FROM price_ticks t
+                       WHERE t.instrument_id = %(iid)s
+                         AND t.observed_at > %(e_observed_at)s)
+
+Result  (cost=4.44..4.45 rows=1 width=1) (actual time=0.002..0.002 rows=1.00 loops=1)
+  Buffers: shared hit=3
+  InitPlan 1
+    ->  Index Only Scan using ix_price_ticks_instrument_time on price_ticks t  (cost=0.42..8.46 rows=2 width=0) (actual time=0.001..0.001 rows=0.00 loops=1)
+          Index Cond: ((instrument_id = '1'::smallint) AND (observed_at > '2026-01-05 23:08:18.1+05:30'::timestamp with time zone))
+          Heap Fetches: 0
+          Index Searches: 1
+          Buffers: shared hit=3
+Planning Time: 0.017 ms
+Execution Time: 0.004 ms
+

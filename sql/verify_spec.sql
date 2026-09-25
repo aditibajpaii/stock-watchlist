@@ -1,7 +1,8 @@
 -- =====================================================================
 -- verify_spec.sql
 -- Compares the LIVE PostgreSQL catalog against docs/PHASE1_SPEC.md
--- (tables + constraints) and the approved Phase 4 functions/triggers.
+-- (tables + constraints), the approved Phase 4 functions/triggers and the
+-- approved Phase 6 index.
 -- Read-only. Every expected fact is written below as data, then diffed
 -- against pg_catalog. Any mismatch is printed; psql exits non-zero if
 -- anything differs.
@@ -141,9 +142,11 @@ WHERE l.conname IS NULL OR e.conname IS NULL
    OR e.tbl <> l.tbl OR e.def <> l.def;
 
 -- ---------------------------------------------------------------------
--- 3. Functions, triggers and extra indexes (Phase 4 state)
---    Exactly these public functions and user triggers must exist, with
---    these exact definitions; no index beyond those created by PK/UNIQUE.
+-- 3. Functions, triggers and non-constraint indexes (Phase 4 + Phase 6)
+--    Exactly these public functions, user triggers and non-constraint
+--    indexes must exist, with these exact definitions. Indexes created by
+--    PK/UNIQUE constraints are already covered by section 2. Any OTHER
+--    index is reported as EXTRA; a missing one as MISSING.
 -- ---------------------------------------------------------------------
 CREATE TEMP TABLE expected_objects (kind TEXT, name TEXT, def TEXT);
 INSERT INTO expected_objects VALUES
@@ -154,7 +157,9 @@ INSERT INTO expected_objects VALUES
  ('trigger',  'trg_price_ticks_evaluate_alerts',
   'CREATE TRIGGER trg_price_ticks_evaluate_alerts AFTER INSERT ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION evaluate_price_alerts()'),
  ('trigger',  'trg_alert_events_check_instrument',
-  'CREATE TRIGGER trg_alert_events_check_instrument BEFORE INSERT OR UPDATE OF rule_id, tick_id ON public.alert_events FOR EACH ROW EXECUTE FUNCTION check_alert_event_instrument()');
+  'CREATE TRIGGER trg_alert_events_check_instrument BEFORE INSERT OR UPDATE OF rule_id, tick_id ON public.alert_events FOR EACH ROW EXECUTE FUNCTION check_alert_event_instrument()'),
+ ('index',    'ix_price_ticks_instrument_time',
+  'CREATE INDEX ix_price_ticks_instrument_time ON public.price_ticks USING btree (instrument_id, observed_at DESC, tick_id DESC)');
 
 CREATE TEMP VIEW live_objects AS
 SELECT 'function' AS kind, p.proname::TEXT AS name,
@@ -174,7 +179,7 @@ WHERE i.indrelid::regclass::TEXT IN
       ('users','instruments','watchlists','watchlist_items','price_ticks','alert_rules','alert_events')
   AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid);
 
-\echo '===== 3. Function / trigger / extra-index mismatches (expect 0 rows) ====='
+\echo '===== 3. Function / trigger / index mismatches (expect 0 rows) ====='
 SELECT coalesce(e.kind, l.kind) AS kind, coalesce(e.name, l.name) AS name,
        CASE WHEN l.name IS NULL THEN 'MISSING in live DB'
             WHEN e.name IS NULL THEN 'EXTRA in live DB'
@@ -184,8 +189,8 @@ FROM expected_objects e
 FULL JOIN live_objects l ON l.kind = e.kind AND l.name = e.name
 WHERE l.name IS NULL OR e.name IS NULL OR e.def <> l.def;
 
-\echo '===== 3b. Functions and triggers present ====='
-SELECT kind, name, def FROM live_objects WHERE kind <> 'index' ORDER BY kind, name;
+\echo '===== 3b. Functions, triggers and non-constraint indexes present ====='
+SELECT kind, name, def FROM live_objects ORDER BY kind, name;
 
 -- ---------------------------------------------------------------------
 -- 4. Relationship cardinalities derived from the catalog (for the ER)
@@ -230,12 +235,12 @@ BEGIN
     FROM expected_objects e FULL JOIN live_objects l ON l.kind = e.kind AND l.name = e.name
     WHERE l.name IS NULL OR e.name IS NULL OR e.def <> l.def;
 
-    RAISE NOTICE 'columns checked: %, constraints checked: %, functions/triggers checked: %',
+    RAISE NOTICE 'columns checked: %, constraints checked: %, functions/triggers/indexes checked: %',
         (SELECT count(*) FROM expected_columns), (SELECT count(*) FROM expected_constraints),
         (SELECT count(*) FROM expected_objects);
     IF n_col + n_con + n_obj > 0 THEN
         RAISE EXCEPTION 'SPEC MISMATCH: % column, % constraint, % function/trigger/index differences',
             n_col, n_con, n_obj;
     END IF;
-    RAISE NOTICE 'LIVE SCHEMA MATCHES docs/PHASE1_SPEC.md (tables, constraints, Phase 4 functions/triggers)';
+    RAISE NOTICE 'LIVE SCHEMA MATCHES docs/PHASE1_SPEC.md (tables, constraints, Phase 4 functions/triggers, Phase 6 index)';
 END $$;

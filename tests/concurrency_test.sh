@@ -6,7 +6,7 @@
 # transaction) running at the same time as the others.
 #
 # Uses a THROWAWAY database (stock_watchlist_ctest), built from
-# sql/00, 01, 03 and dropped at the end. The dev database is not touched.
+# sql/00, 01, 03, 06 and dropped at the end. The dev database is not touched.
 #
 # Run:  bash tests/concurrency_test.sh
 # Exit code 0 = all checks passed.
@@ -32,7 +32,7 @@ trap cleanup EXIT
 echo "== setup: fresh database $DB"
 "$PG_BIN/dropdb" --if-exists "$DB" >/dev/null 2>&1
 "$PG_BIN/createdb" "$DB" || exit 1
-for f in 00_schema.sql 01_seed.sql 03_functions_triggers.sql; do
+for f in 00_schema.sql 01_seed.sql 03_functions_triggers.sql 06_indexes.sql; do
     q -f "$ROOT/sql/$f" >/dev/null 2>&1 || { echo "setup failed on $f"; exit 1; }
 done
 q -c "SHOW default_transaction_isolation" | sed 's/^/   isolation: /'

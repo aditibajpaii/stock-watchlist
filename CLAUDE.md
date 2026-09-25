@@ -156,11 +156,16 @@ Indexes:
 
 - psql: `export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"`; dev DB
   `stock_watchlist`; rebuild = 00_schema → 01_seed → 03_functions_triggers
+  → 06_indexes
 - Python: project venv `.venv/` (Python 3.13, psycopg 3.3.6 only);
   replay = `python -m app.replay data/replay_prices.csv`
 - Tests: sql/02_schema_tests.sql, sql/verify_spec.sql, sql/04_alert_tests.sql,
-  `bash tests/concurrency_test.sh`, `python -m unittest tests.test_replay -v`
-  (Python/concurrency tests use throwaway DBs, never the dev DB)
+  `bash tests/concurrency_test.sh`, `python -m unittest tests.test_replay tests.test_indexes -v`
+  (Python/concurrency tests use throwaway DBs; test_indexes reads the dev DB only)
+- Benchmark: `python tests/benchmark_indexes.py` (throwaway
+  stock_watchlist_benchmark, 500k rows) + sql/07_benchmark_queries.sql
+- Performance indexes live in sql/06_indexes.sql, never in 00_schema.sql;
+  verify_spec.sql expects exactly ix_price_ticks_instrument_time
 
 ## Working rules
 

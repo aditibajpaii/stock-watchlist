@@ -1,7 +1,8 @@
 """Phase 5 tests for app/replay.py, against a REAL PostgreSQL server.
 
 Each test gets a fresh throwaway database cloned from a template that is
-built once from sql/00_schema.sql, 01_seed.sql and 03_functions_triggers.sql.
+built once from sql/00_schema.sql, 01_seed.sql, 03_functions_triggers.sql
+and 06_indexes.sql (the production build).
 The dev database (stock_watchlist) is never touched.
 
 Run from the project root with the virtual environment active:
@@ -53,7 +54,8 @@ def setUpModule():
     admin(f"DROP DATABASE IF EXISTS {TEST_DB}")
     admin(f"DROP DATABASE IF EXISTS {TEMPLATE_DB}")
     admin(f"CREATE DATABASE {TEMPLATE_DB}")
-    result = psql_file(TEMPLATE_DB, "00_schema.sql", "01_seed.sql", "03_functions_triggers.sql")
+    result = psql_file(TEMPLATE_DB, "00_schema.sql", "01_seed.sql", "03_functions_triggers.sql",
+                       "06_indexes.sql")
     if result.returncode != 0:
         raise RuntimeError("building template DB failed:\n" + result.stderr)
 

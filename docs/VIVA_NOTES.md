@@ -366,6 +366,201 @@ password exists. If one were needed, libpq reads PGPASSWORD or
 
 ---
 
+## Phase 6 – Indexing (numbers from docs/INDEX_BENCHMARK.md, 500,000 ticks)
+
+### 26. What is an index?
+
+WHY: finding rows without reading the whole table.
+VIVA: "What is an index?"
+ANSWER: A separate, sorted data structure that maps column values to the
+rows (their physical locations) holding them, like a book's index. The
+DBMS maintains it automatically on every INSERT, UPDATE and DELETE.
+
+### 27. Why does price_ticks need one?
+
+WHY: it is the only table that grows without limit, and our hottest
+queries ask for "one instrument, in time order".
+VIVA: "Why index price_ticks and not the other tables?"
+ANSWER:
+- The other tables are tiny: 3 users, 7 instruments, 6 rules. The ticks
+  table grows with every price.
+- Without our index, "latest 50 RELIANCE ticks" read all 6,371 table
+  pages and sorted 25,000 rows: 9.461 ms. With it, 16 pages and no sort:
+  0.020 ms.
+- It matters most for the alert trigger. ingest_tick went from 30.081 ms
+  to 0.199 ms per tick, because the trigger's late-tick check had been a
+  sequential scan over 500,001 rows on every insert.
+
+### 28. What is a B-tree?
+
+WHY: it is PostgreSQL's default index and supports equality, ranges and
+ordering.
+VIVA: "Explain a B-tree."
+ANSWER: A balanced tree of pages. The internal pages hold separator keys,
+the leaf pages hold (key → row pointer) entries in sorted order and are
+linked to their neighbours. Every leaf is at the same depth, so a lookup
+costs a few page reads (3–4 here), and after finding a start point you
+can walk the leaves in order (or backwards) for ranges and ORDER BY.
+
+### 29. Why this column order: (instrument_id, observed_at DESC, tick_id DESC)?
+
+WHY: a composite B-tree is sorted by the first column, then the second
+within it, and so on, like a phone book (surname, then first name).
+VIVA: "Why does instrument_id come first?"
+ANSWER: Every query has `instrument_id = ?`. Putting it first groups each
+instrument's ticks into one contiguous part of the index. With
+observed_at first, one instrument's ticks would be scattered among all
+the others'.
+
+VIVA: "Why observed_at second?"
+ANSWER: Within one instrument we filter and sort by time: time ranges,
+latest-first, the previous tick. Because it comes right after the
+equality column, the index is already in the order ORDER BY wants.
+
+VIVA: "Why is tick_id in the index?"
+ANSWER:
+- Our ordering is (observed_at, tick_id), because timestamps can repeat.
+- Including tick_id makes the index order match ORDER BY exactly, so
+  `LIMIT 1` needs no sort even with equal timestamps.
+- It also lets the trigger's row comparison `(observed_at, tick_id) < (…)`
+  be an index condition (4 buffers).
+
+VIVA: "Why DESC?"
+ANSWER:
+- The most frequent access is "latest first" (UI, previous tick, late
+  check), and DESC makes that a plain forward scan.
+- An all-ASC index would work almost identically: a B-tree can be
+  scanned backwards (`Index Scan Backward`).
+- DESC only really matters when one query mixes directions. So it states
+  our intent; it isn't strictly required.
+
+### 30. Why not index every column?
+
+WHY: every index costs space and slows every write.
+VIVA: "Why not add an index on every foreign key, or every column?"
+ANSWER:
+- Each index must be updated on every INSERT and uses disk. Ours adds
+  19 MB to a 48 MB table (100 → 120 MB total).
+- We add an index only where a measured query needs it. The alert
+  cooldown lookup filters alert_events by rule_id, and
+  uq_alert_events_rule_tick (rule_id, tick_id) already starts with
+  rule_id, so no new index was needed there.
+- Tiny tables like alert_rules (6 rows) are fastest to read with a Seq
+  Scan anyway.
+
+### 31. What is the write cost of an index?
+
+WHY: an index trades faster reads for extra work on writes.
+VIVA: "Doesn't the index slow down inserting prices?"
+ANSWER:
+- Each new tick adds one entry to this B-tree: a few page reads and one
+  write.
+- Here it's a net win even for writes: ingest_tick got 150× faster, because
+  the trigger *reads* this same index on every insert.
+- UPDATE/DELETE costs don't apply in practice, because ticks are
+  append-only.
+- Heavy bulk loads would be slower. That is why the benchmark load ran
+  before creating the index, which is also the usual technique.
+
+### 32. What does EXPLAIN ANALYZE do?
+
+WHY: to see what the database actually did, not guess.
+VIVA: "What's the difference between EXPLAIN and EXPLAIN ANALYZE?"
+ANSWER:
+- EXPLAIN shows the plan and the planner's *estimated* costs and rows.
+- EXPLAIN ANALYZE also *runs* the query and adds actual times and row
+  counts per plan node.
+- BUFFERS adds how many 8 kB pages were read: hit = from memory, read =
+  from disk.
+- For writing queries, wrap it in BEGIN … ROLLBACK, because ANALYZE
+  really executes them.
+
+### 33. Sequential Scan vs Index Scan
+
+WHY: they are the two basic ways to read a table.
+VIVA: "Difference between a Seq Scan and an Index Scan?"
+ANSWER:
+- A Seq Scan reads every page of the table in physical order and tests
+  each row. That's cheap per page, but reads everything: 500,001 rows
+  removed in the trigger's baseline late check.
+- An Index Scan walks the B-tree to the matching entries, then fetches
+  only those rows.
+- An Index *Only* Scan never touches the table, when every needed column
+  is in the index and the visibility map says the pages are all-visible.
+  Our late check: `Heap Fetches: 0`, 3 buffers.
+- A Bitmap scan is in between: it collects matching row locations from
+  the index, then reads those pages in physical order.
+
+### 34. Why can PostgreSQL choose not to use an index?
+
+WHY: the planner is cost-based and picks the cheapest *estimated* plan.
+VIVA: "You created an index. Why doesn't PostgreSQL always use it?"
+ANSWER:
+- It compares estimated costs. If a query needs a large fraction of the
+  table, or the table is tiny, a Seq Scan (sequential pages) beats many
+  random index lookups.
+- Our own example: query B (900 rows over ~220 pages) still chose Bitmap
+  Heap Scan + Sort rather than an ordered Index Scan, and it was right
+  (0.328 ms).
+- On the 7-row seed database, a Seq Scan is cheapest.
+- Stale statistics can also mislead it, which is why we ran ANALYZE after
+  loading.
+
+### 35. B-tree vs BRIN
+
+WHY: BRIN is PostgreSQL's tiny index for huge, naturally ordered tables.
+VIVA: "Why not use BRIN for time-series data?"
+ANSWER:
+- BRIN stores just min/max of a column per block range (128 pages). Ours
+  was **24 kB** vs 19 MB for the B-tree.
+- It helps only when the query limits that column's range AND rows are
+  physically in that order. It helped our 30-min range (3.166 ms vs
+  4.539 ms baseline), but the B-tree was still 10× faster (0.328 ms).
+- BRIN can't give rows in order and knows nothing about instrument_id, so
+  it didn't help "latest N for one instrument" or the previous-tick
+  lookup at all.
+- Those are our main queries, so we kept only the B-tree.
+
+### 36. Why not TimescaleDB?
+
+WHY: fewer moving parts, and the course is about core DBMS features.
+VIVA: "Isn't TimescaleDB built for this?"
+ANSWER:
+- TimescaleDB is a PostgreSQL extension for very large time-series
+  (automatic partitioning into "chunks", compression).
+- Our scale, well under millions of rows, is served in microseconds by one
+  standard B-tree, as measured.
+- Adding an extension would hide the database concepts we're meant to
+  demonstrate, and adds an installation dependency.
+
+### 37. Why is partitioning unnecessary here?
+
+WHY: partitioning solves problems we don't have yet.
+VIVA: "Shouldn't a price history table be partitioned by date?"
+ANSWER:
+- Partitioning splits a table into child tables, e.g. one per month. It
+  helps when tables reach tens or hundreds of millions of rows (dropping
+  old months instantly, vacuum per partition, pruning scans).
+- At 500,000 rows our indexed lookups read 3–16 pages.
+- It would complicate the schema (the PK must include the partition key)
+  and our UNIQUE constraint, for no measured benefit.
+- It stays a documented future option.
+
+### 38. PostgreSQL 18 skip scan (a detail an examiner might spot)
+
+WHY: the "before" plan wasn't a plain Seq Scan.
+VIVA: "Your baseline used uq_price_ticks_source_event for instrument_id.
+How, if instrument_id is its second column?"
+ANSWER:
+- PostgreSQL 18 added B-tree skip scan. When the leading column (source)
+  has few distinct values, it does one index search per value
+  (`Index Searches: 2`).
+- It found the right rows but not in time order, and they were spread
+  over every heap page. So it still read 6,371 pages and sorted.
+- Our index serves both the filter and the order.
+
+---
+
 ## Quick-fire drill
 
 1. Which table row does ingest_tick lock? *The instruments row of that
@@ -387,3 +582,9 @@ password exists. If one were needed, libpq reads PGPASSWORD or
 11. Same run_id rerun → ? *All rows DUPLICATE.*
 12. Exit codes of the replay? *0 ok, 1 bad CSV/arguments, 2 DB error.*
 13. How many alerts does one demo replay create on a fresh DB? *8.*
+14. Name and define the performance index. *ix_price_ticks_instrument_time
+    on price_ticks (instrument_id, observed_at DESC, tick_id DESC).*
+15. Latest-50 query before → after? *9.461 ms, 6,371 buffers → 0.020 ms,
+    16 buffers.*
+16. ingest_tick before → after? *30.081 → 0.199 ms per call (500k rows).*
+17. Index size vs table? *19 MB index, 48 MB table; BRIN was 24 kB.*

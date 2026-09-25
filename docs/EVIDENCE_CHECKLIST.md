@@ -395,8 +395,91 @@ psql -q -d stock_watchlist -v ON_ERROR_STOP=1 \
       (18 tests, OK). They use throwaway databases; stock_watchlist is not
       touched.
 
+## Phase 6 – Index benchmark
+
+Real measured numbers are in docs/INDEX_BENCHMARK.md. Screenshots must
+come from your own runs; timings will differ slightly from the
+documented ones.
+
+### Setup
+```sh
+export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
+cd "/Users/aditi/dbms project"
+source .venv/bin/activate
+python tests/benchmark_indexes.py        # ~1 min; builds stock_watchlist_benchmark
+```
+
+### Screenshots
+
+- [ ] **60_benchmark-run.png** — terminal output of
+      `python tests/benchmark_indexes.py`: the three stage tables (median
+      ms, buffers, plan nodes), plus the "Identical results" line.
+      Evidence for items 6 and 7 of your list (before/after timing,
+      buffer/plan difference).
+- [ ] **61_row-count.png** — large benchmark row count:
+      `psql -d stock_watchlist_benchmark -c "SELECT count(*), count(DISTINCT instrument_id) FROM price_ticks;"`
+      (500000, 20)
+- [ ] **62_explain-before.png** and **65_explain-after.png** — in one run:
+      `psql -d stock_watchlist_benchmark -f sql/07_benchmark_queries.sql`
+      - "WITHOUT" section (index dropped inside a rolled-back transaction):
+        query A shows Sort + Bitmap Heap Scan on uq_price_ticks_source_event,
+        Buffers ≈ 6,371, Execution Time ≈ 9–17 ms
+      - "WITH" section: query A shows Index Scan using
+        ix_price_ticks_instrument_time, no Sort, Buffers ≈ 16,
+        Execution Time ≈ 0.02 ms
+      - The script refuses to run on stock_watchlist.
+- [ ] **63_create-index.png** — CREATE INDEX with timing, on the benchmark
+      DB:
+      ```sh
+      psql -d stock_watchlist_benchmark
+      ```
+      ```sql
+      DROP INDEX ix_price_ticks_instrument_time;
+      \timing on
+      \i sql/06_indexes.sql
+      ```
+      For the real project DB, the same file:
+      `psql -d stock_watchlist -f sql/06_indexes.sql` prints
+      `NOTICE: relation … already exists, skipping` (IF NOT EXISTS) once
+      installed.
+- [ ] **64_d-price_ticks.png** — `psql -d stock_watchlist -c '\d price_ticks'`
+      ("Indexes:" shows ix_price_ticks_instrument_time
+      btree (instrument_id, observed_at DESC, tick_id DESC))
+- [ ] **66_sizes.png** — index and table sizes:
+      ```sql
+      SELECT relname, pg_size_pretty(pg_relation_size(oid)) AS size
+      FROM pg_class
+      WHERE oid = 'price_ticks'::regclass
+         OR oid IN (SELECT indexrelid FROM pg_index WHERE indrelid = 'price_ticks'::regclass)
+      ORDER BY pg_relation_size(oid) DESC;
+      SELECT pg_size_pretty(pg_total_relation_size('price_ticks')) AS total;
+      ```
+      Run it on stock_watchlist_benchmark (48 MB table, 19 MB index,
+      120 MB total).
+- [ ] **67_previous-tick-index.png** — query C in the WITH section of
+      07: `Index Cond: ((instrument_id = …) AND (ROW(observed_at, tick_id)
+      < ROW(…)))`, Buffers ≈ 4. For the trigger's own plan, open
+      docs/benchmark_results/trigger_auto_explain_btree.txt and capture the
+      "EXISTS" and "SELECT t.price" blocks. The _baseline file shows
+      `Seq Scan on price_ticks … Rows Removed by Filter: 500001`.
+- [ ] **68_brin.png** (optional) — the BRIN stage table from 60, or
+      plans_brin.txt query B (BitmapAnd using ix_bench_brin_observed_at)
+- [ ] **69_regression.png** — all suites passing:
+      ```sh
+      psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/02_schema_tests.sql | tail -5
+      psql -q -d stock_watchlist -f sql/verify_spec.sql 2>&1 | tail -2
+      psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/04_alert_tests.sql | tail -5
+      bash tests/concurrency_test.sh | tail -1
+      python -m unittest tests.test_replay tests.test_indexes
+      ```
+      (51/51, MATCHES, 50/50, ALL CONCURRENCY CHECKS PASSED, 33 tests OK)
+
+### Cleanup when finished with screenshots
+```sh
+dropdb stock_watchlist_benchmark
+```
+
 ## Later phases (not yet available)
 
-- [ ] _(Phase 6)_ EXPLAIN ANALYZE before/after index
 - [ ] _(Phase 7)_ watchlist UI; fired-alert UI; DB Inspector; live alert via SSE
 - [ ] _(Phase 9)_ SERIALIZABLE demonstration (optional)

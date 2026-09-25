@@ -1,0 +1,164 @@
+duration: 0.008 ms  plan:
+Query Text: SELECT i.instrument_id, i.is_active
+                                          FROM instruments i
+    WHERE i.exchange = p_exchange
+      AND i.symbol   = p_symbol
+    FOR NO KEY UPDATE
+LockRows  (cost=0.15..8.18 rows=1 width=15) (actual time=0.008..0.008 rows=1.00 loops=1)
+  Buffers: shared hit=3
+  ->  Index Scan using uq_instruments_exchange_symbol on instruments i  (cost=0.15..8.17 rows=1 width=15) (actual time=0.004..0.004 rows=1.00 loops=1)
+        Index Cond: ((exchange = $1) AND (symbol = $2))
+        Index Searches: 1
+        Buffers: shared hit=2
+
+duration: 0.002 ms  plan:
+Query Text: SELECT 1 FROM ONLY "public"."instruments" x WHERE "instrument_id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x
+Query Parameters: $1 = '1'
+LockRows  (cost=0.15..8.18 rows=1 width=10) (actual time=0.002..0.002 rows=1.00 loops=1)
+  Buffers: shared hit=3
+  ->  Index Scan using pk_instruments on instruments x  (cost=0.15..8.17 rows=1 width=10) (actual time=0.001..0.001 rows=1.00 loops=1)
+        Index Cond: (instrument_id = $1)
+        Index Searches: 1
+        Buffers: shared hit=2
+
+duration: 0.002 ms  plan:
+Query Text: EXISTS (SELECT 1 FROM price_ticks t
+               WHERE t.instrument_id = NEW.instrument_id
+                 AND t.observed_at > NEW.observed_at)
+Result  (cost=0.46..0.47 rows=1 width=1) (actual time=0.002..0.002 rows=1.00 loops=1)
+  Buffers: shared hit=3
+  InitPlan 1
+    ->  Index Only Scan using ix_price_ticks_instrument_time on price_ticks t  (cost=0.42..343.08 rows=8333 width=0) (actual time=0.002..0.002 rows=0.00 loops=1)
+          Index Cond: ((instrument_id = $18) AND (observed_at > $19))
+          Heap Fetches: 0
+          Index Searches: 1
+          Buffers: shared hit=3
+
+duration: 0.008 ms  plan:
+Query Text: SELECT t.price                       FROM price_ticks t
+    WHERE t.instrument_id = NEW.instrument_id
+      AND (t.observed_at, t.tick_id) < (NEW.observed_at, NEW.tick_id)
+    ORDER BY t.observed_at DESC, t.tick_id DESC
+    LIMIT 1
+Limit  (cost=0.42..2.84 rows=1 width=22) (actual time=0.008..0.008 rows=1.00 loops=1)
+  Buffers: shared hit=4
+  ->  Index Scan using ix_price_ticks_instrument_time on price_ticks t  (cost=0.42..20114.71 rows=8333 width=22) (actual time=0.008..0.008 rows=1.00 loops=1)
+        Index Cond: ((instrument_id = $18) AND (ROW(observed_at, tick_id) < ROW($19, $21)))
+        Index Searches: 1
+        Buffers: shared hit=4
+
+duration: 0.031 ms  plan:
+Query Text: SELECT t.observed_at                               FROM alert_events e
+        JOIN price_ticks t ON t.tick_id = e.tick_id
+        WHERE e.rule_id = v_rule.rule_id
+        ORDER BY t.observed_at DESC, t.tick_id DESC
+        LIMIT 1
+Limit  (cost=73.47..73.47 rows=1 width=16) (actual time=0.030..0.030 rows=0.00 loops=1)
+  Buffers: shared hit=2
+  ->  Sort  (cost=73.47..73.48 rows=7 width=16) (actual time=0.030..0.030 rows=0.00 loops=1)
+        Sort Key: t.observed_at DESC, t.tick_id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=2
+        ->  Nested Loop  (cost=4.63..73.43 rows=7 width=16) (actual time=0.029..0.029 rows=0.00 loops=1)
+              Buffers: shared hit=2
+              ->  Bitmap Heap Scan on alert_events e  (cost=4.21..14.35 rows=7 width=8) (actual time=0.029..0.029 rows=0.00 loops=1)
+                    Recheck Cond: (rule_id = $26)
+                    Heap Blocks: exact=1
+                    Buffers: shared hit=2
+                    ->  Bitmap Index Scan on uq_alert_events_rule_tick  (cost=0.00..4.21 rows=7 width=0) (actual time=0.002..0.002 rows=51.00 loops=1)
+                          Index Cond: (rule_id = $26)
+                          Index Searches: 1
+                          Buffers: shared hit=1
+              ->  Index Scan using pk_price_ticks on price_ticks t  (cost=0.42..8.44 rows=1 width=16) (never executed)
+                    Index Cond: (tick_id = e.tick_id)
+                    Index Searches: 0
+
+duration: 0.001 ms  plan:
+Query Text: SELECT r.instrument_id                            FROM alert_rules r WHERE r.rule_id = NEW.rule_id
+Index Scan using pk_alert_rules on alert_rules r  (cost=0.15..8.17 rows=1 width=8) (actual time=0.001..0.001 rows=1.00 loops=1)
+  Index Cond: (rule_id = $17)
+  Index Searches: 1
+  Buffers: shared hit=2
+
+duration: 0.002 ms  plan:
+Query Text: SELECT t.instrument_id                            FROM price_ticks t WHERE t.tick_id = NEW.tick_id
+Index Scan using pk_price_ticks on price_ticks t  (cost=0.42..8.44 rows=1 width=8) (actual time=0.002..0.002 rows=1.00 loops=1)
+  Index Cond: (tick_id = $19)
+  Index Searches: 1
+  Buffers: shared hit=4
+
+duration: 0.002 ms  plan:
+Query Text: SELECT 1 FROM ONLY "public"."alert_rules" x WHERE "rule_id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x
+Query Parameters: $1 = '1'
+LockRows  (cost=0.15..8.18 rows=1 width=10) (actual time=0.002..0.002 rows=1.00 loops=1)
+  Buffers: shared hit=3
+  ->  Index Scan using pk_alert_rules on alert_rules x  (cost=0.15..8.17 rows=1 width=10) (actual time=0.001..0.001 rows=1.00 loops=1)
+        Index Cond: (rule_id = $1)
+        Index Searches: 1
+        Buffers: shared hit=2
+
+duration: 0.002 ms  plan:
+Query Text: SELECT 1 FROM ONLY "public"."price_ticks" x WHERE "tick_id" OPERATOR(pg_catalog.=) $1 FOR KEY SHARE OF x
+Query Parameters: $1 = '500102'
+LockRows  (cost=0.42..8.45 rows=1 width=10) (actual time=0.002..0.002 rows=1.00 loops=1)
+  Buffers: shared hit=5
+  ->  Index Scan using pk_price_ticks on price_ticks x  (cost=0.42..8.44 rows=1 width=10) (actual time=0.002..0.002 rows=1.00 loops=1)
+        Index Cond: (tick_id = $1)
+        Index Searches: 1
+        Buffers: shared hit=4
+
+duration: 0.102 ms  plan:
+Query Text: INSERT INTO alert_events (rule_id, tick_id)
+        VALUES (v_rule.rule_id, NEW.tick_id)
+        ON CONFLICT ON CONSTRAINT uq_alert_events_rule_tick DO NOTHING
+        RETURNING event_id
+Insert on alert_events  (cost=0.00..0.01 rows=1 width=32) (actual time=0.053..0.053 rows=1.00 loops=1)
+  Conflict Resolution: NOTHING
+  Conflict Arbiter Indexes: uq_alert_events_rule_tick
+  Tuples Inserted: 1
+  Conflicting Tuples: 0
+  Buffers: shared hit=15
+  ->  Result  (cost=0.00..0.01 rows=1 width=32) (actual time=0.001..0.001 rows=1.00 loops=1)
+        Buffers: shared hit=1
+
+duration: 0.001 ms  plan:
+Query Text: SELECT pg_notify('alert_events', v_event_id::TEXT)
+Result  (cost=0.00..0.02 rows=1 width=4) (actual time=0.001..0.001 rows=1.00 loops=1)
+
+duration: 0.033 ms  plan:
+Query Text: SELECT r.rule_id, r.direction, r.threshold, r.cooldown_seconds
+        FROM alert_rules r
+        WHERE r.instrument_id = NEW.instrument_id
+          AND r.is_active
+        ORDER BY r.rule_id
+Query Parameters: $1 = NULL, $2 = NULL, $3 = NULL, $4 = NULL, $5 = NULL, $6 = NULL, $7 = NULL, $8 = NULL, $9 = NULL, $10 = NULL, $11 = NULL, $12 = NULL, $13 = NULL, $14 = NULL, $15 = NULL, $16 = NULL, $17 = NULL, $18 = '1', $19 = NULL, $20 = NULL, $21 = NULL, $22 = NULL, $23 = NULL, $24 = NULL, $25 = NULL, $26 = NULL, $27 = NULL, $28 = NULL
+Sort  (cost=18.64..18.64 rows=2 width=64) (actual time=0.032..0.032 rows=2.00 loops=1)
+  Sort Key: rule_id
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=1
+  ->  Seq Scan on alert_rules r  (cost=0.00..18.62 rows=2 width=64) (actual time=0.030..0.031 rows=2.00 loops=1)
+        Filter: (is_active AND (instrument_id = $18))
+        Rows Removed by Filter: 4
+        Buffers: shared hit=1
+
+duration: 0.400 ms  plan:
+Query Text: INSERT INTO price_ticks AS pt
+        (instrument_id, observed_at, price, volume, source, source_event_id)
+    VALUES
+        (v_instrument_id, p_observed_at, p_price, p_volume, p_source, p_source_event_id)
+    ON CONFLICT ON CONSTRAINT uq_price_ticks_source_event DO NOTHING
+    RETURNING pt.tick_id
+Insert on price_ticks pt  (cost=0.00..0.02 rows=1 width=138) (actual time=0.035..0.035 rows=1.00 loops=1)
+  Conflict Resolution: NOTHING
+  Conflict Arbiter Indexes: uq_price_ticks_source_event
+  Tuples Inserted: 1
+  Conflicting Tuples: 0
+  Buffers: shared hit=13
+  ->  Result  (cost=0.00..0.02 rows=1 width=138) (actual time=0.002..0.002 rows=1.00 loops=1)
+        Buffers: shared hit=1
+
+duration: 0.510 ms  plan:
+Query Text: SELECT * FROM ingest_tick('NSE', 'RELIANCE', $1 + interval '1 second', 3010, 1, 'MANUAL', 'bench-auto-explain')
+Query Parameters: $1 = '2026-01-05 23:08:18.1+05:30'
+Function Scan on ingest_tick  (cost=0.25..10.25 rows=1000 width=40) (actual time=0.509..0.510 rows=1.00 loops=1)
+  Buffers: shared hit=65
