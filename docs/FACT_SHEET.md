@@ -2,7 +2,7 @@
 
 Factual notes only. Not report text — write your own sentences.
 Every value below was taken from the running database or from the SQL
-files. Status: **Phase 4 (ingestion + alert engine) complete**. Items
+files. Status: **Phase 5 (offline Python replay) complete**. Items
 marked _(later phase)_ do not exist yet.
 
 ---
@@ -26,8 +26,10 @@ marked _(later phase)_ do not exist yet.
 | Database name | `stock_watchlist` |
 | Server time zone | Asia/Kolkata |
 | Default isolation level | READ COMMITTED |
-| Python (installed, not yet used) | 3.13.15 |
-| Backend / frontend | _(later phase)_ FastAPI + psycopg 3; HTML/CSS/JS |
+| Python | 3.13.15 (project virtual environment `.venv/`) |
+| Database driver | psycopg 3.3.6 (`psycopg[binary]`, bundled libpq 18.0.6) |
+| Python test framework | unittest (standard library, no extra dependency) |
+| Backend / frontend | _(later phase)_ FastAPI; HTML/CSS/JS |
 
 ## Tables (7)
 
@@ -355,14 +357,134 @@ uq_alert_events_rule_tick.
 | SW002 | ingest_tick | instrument is inactive |
 | 23514 + `trg_alert_events_check_instrument` | integrity trigger | rule/tick instrument mismatch |
 
+## Offline replay (Phase 5, app/replay.py)
+
+### Files
+
+| File | Role |
+|---|---|
+| app/replay.py | replay CLI |
+| app/config.py | DB connection from environment variables |
+| data/replay_prices.csv | deterministic demo feed (30 rows) |
+| data/README.md | row-by-row expected behaviour of the demo feed |
+| requirements.txt | `psycopg[binary]==3.3.6` (only dependency) |
+| .env.example | documents DB_NAME / DB_HOST / DB_PORT / DB_USER (no secrets) |
+| tests/test_replay.py | 18 automated tests |
+
+### Configuration
+
+- Environment variables: DB_NAME (default `stock_watchlist`), DB_HOST,
+  DB_PORT, DB_USER (unset = libpq defaults: local socket, 5432, OS user)
+- No password in code or files. The local server uses trust auth; libpq's
+  own PGPASSWORD / ~/.pgpass would apply if ever needed.
+- The program does not read .env files; variables must be exported.
+
+### CLI
+
+- Entry point: `python -m app.replay <csv> [options]`
+
+| Option | Effect |
+|---|---|
+| --run-id ID | reuse an earlier run id (retry); default = new UUID4 |
+| --delay-ms N | real pause between events (default 0) |
+| --dry-run | validate and print what would be sent; **no DB connection at all** |
+| --continue-on-error | keep going after a failed event (exit code still 2) |
+| --start-after-latest | new run only: start 1 s after the latest stored tick of the CSV's instruments |
+
+- Exit codes: 0 success; 1 invalid CSV or arguments (nothing sent);
+  2 database/ingestion error (incl. connection failure, late-start refusal)
+- run_id allowed characters: letters, digits, `-`, `_` (max 64)
+
+### CSV format
+
+- Header exactly: `offset_seconds,exchange,symbol,price,volume`
+- offset_seconds: integer ≥ 0, non-decreasing down the file
+- price: decimal > 0 (parsed as Python Decimal, never float)
+- volume: decimal ≥ 0 or blank; blank → SQL NULL
+- The whole file is validated before anything is sent. Any error →
+  exit 1, 0 rows sent, and every problem is listed.
+- Python does not check NUMERIC precision; the database does
+  (e.g. 999999999999 → SQLSTATE 22003).
+
+### Identity and time
+
+- source = 'REPLAY'
+- source_event_id = `<run_id>:<row_no as 6 digits>` (row 1 = first data row)
+- New run: run_start = current time truncated to whole seconds (UTC stored,
+  printed in IST)
+- observed_at = run_start + offset_seconds
+- Real waiting (--delay-ms) is independent of offset_seconds
+- Retry (--run-id of an existing run): run_start recovered as
+  observed_at(row 1) − offset(row 1), using an exact lookup on the unique
+  key (source, instrument, source_event_id). The id is never parsed.
+  - Result: already-stored rows → DUPLICATE; missing rows continue on the
+    original timeline.
+- Late-start guard (new run only): if the CSV's instruments already have a
+  tick with observed_at ≥ run_start → refuse (exit 2) with an explanation,
+  unless --start-after-latest.
+  - Reason: those ticks would be classified late and no alerts would fire.
+
+### Transaction policy
+
+- Autocommit connection. Each event runs in its own explicit transaction
+  (`conn.transaction()`) containing:
+  1. `SELECT status, tick_id FROM ingest_tick(...)`
+  2. a read of the alert_events created for that tick (for printing)
+  3. COMMIT
+- ingest_tick's instrument lock is held only for that one short transaction
+- Each tick and its alerts are visible, and the NOTIFY delivered, right
+  after each event commits
+- Failed event → that transaction rolls back and the error is printed with
+  its SQLSTATE. Default: stop (later rows not sent), exit 2. Earlier
+  committed rows remain.
+- Never INSERTs into price_ticks directly
+
+### Demo feed facts (data/replay_prices.csv)
+
+- 30 rows; RELIANCE 12, TCS 6, BTCUSDT 8, ETHUSDT 2, INFY 2
+- 8 rows have blank volume
+- Logical span 460 s
+- On a freshly seeded DB one run creates **8 alert events**:
+
+| Row | Tick | Rule |
+|---|---|---|
+| 6 | RELIANCE 2994.00 → 3002.40 | 1 arjun ABOVE 3000 |
+| 9 | TCS 3531.25 → 3498.00 | 4 priya BELOW 3500 |
+| 10 | BTCUSDT 99880 → 100120 | 3 arjun ABOVE 100000 |
+| 18 | ETHUSDT 3048.10 → 2994.60 | 6 kavya BELOW 3000 |
+| 20 | TCS 3512.00 → 3490.00 | 4 priya BELOW 3500 |
+| 22 | BTCUSDT 99800 → 100400 | 3 arjun ABOVE 100000 |
+| 27 | RELIANCE 2990.00 → 3021.50 | 1 arjun ABOVE 3000 |
+| 29 | RELIANCE 3030.00 → 2795.00 | 2 arjun BELOW 2800 |
+
+- No event, by design:
+  - staying beyond a threshold: rows 8, 11, 12, 14, 28, 30
+  - crossing inside cooldown: row 16 (BTC), row 23 (RELIANCE)
+  - inactive rule 5: row 26 (INFY)
+- A second new run straight after (with --start-after-latest) creates 7:
+  row 6 falls inside rule 1's cooldown carried over from the previous run.
+
+### Observed demonstration (throwaway DB, 2026-09-25)
+
+| Run | Command | Result |
+|---|---|---|
+| 1 | --run-id run-X | 30 INSERTED, 8 alerts |
+| 2 | --run-id run-X again | 30 DUPLICATE, 0 inserted, 0 alerts |
+| 3 | --run-id run-Y immediately | refused, exit 2 (late-start guard) |
+| 4 | --run-id run-Y --start-after-latest | 30 INSERTED, 7 alerts |
+
 ## Build / run order
 
 1. sql/00_schema.sql
 2. sql/01_seed.sql
 3. sql/03_functions_triggers.sql
-4. tests: sql/02_schema_tests.sql, sql/verify_spec.sql,
+4. SQL tests: sql/02_schema_tests.sql, sql/verify_spec.sql,
    sql/04_alert_tests.sql, tests/concurrency_test.sh
-5. demo (rolled back): sql/05_demo_queries.sql
+5. Python: `python3.13 -m venv .venv`,
+   `.venv/bin/pip install -r requirements.txt`,
+   `python -m unittest tests.test_replay -v`
+6. demo: `python -m app.replay data/replay_prices.csv --delay-ms 300`,
+   then `sql/05_demo_queries.sql` (rolled back)
 
 ## Tests executed
 
@@ -374,6 +496,11 @@ All results 2026-09-25, PostgreSQL 18.6, after a clean rebuild (00 → 01 → 03
 | Live schema vs spec (Phase 3) | sql/verify_spec.sql | **MATCH** (37 columns, 36 constraints, 5 functions/triggers) |
 | Alert engine (Phase 4) | sql/04_alert_tests.sql | **50 / 50 PASS** |
 | Multi-session concurrency + NOTIFY (Phase 4) | tests/concurrency_test.sh | **17 / 17 PASS** (3 consecutive runs) |
+| Python replay (Phase 5) | tests/test_replay.py | **18 / 18 PASS** (unittest) |
+
+Re-run after Phase 5 (2026-09-25): 02 → 51/51, verify_spec → MATCH,
+04 → 50/50, concurrency → 17/17, replay → 18/18.
+Dev database afterwards: still pure seed data (3/7/5/11/0/6/0).
 
 Phase 2 schema tests:
 - Groups: A unique (12), B check (16), C foreign key (8), D restrict (5),
@@ -385,6 +512,10 @@ Phase 2 schema tests:
 - Phase 4 change: fixture's manual alert_events insert got
   `ON CONFLICT … DO NOTHING` (trigger now creates that event itself);
   no assertion changed
+- Phase 5 change: E6 now checks that arjun's former rules have 0 events
+  AND other users' events are all kept. Before, it required
+  alert_events to be empty, which fails on a DB holding replay data.
+  Test 15 of test_replay.py runs 02 on a replayed DB.
 
 Phase 4 alert tests (50 checks) cover:
 - first tick; ABOVE crossing 2990→2999→3001; staying above; re-cross after
@@ -400,6 +531,30 @@ Phase 4 alert tests (50 checks) cover:
   - late-tick check removed → 3 FAIL
   - integrity trigger dropped → 2 FAIL
 
+Phase 5 replay tests (18, each on a fresh DB cloned from a template
+built from 00 + 01 + 03; dev DB untouched):
+
+| # | Test |
+|---|---|
+| 01 | demo CSV parses: 30 rows, Decimal prices, row numbers 1–30 |
+| 02 | blank volume → None → stored NULL (8 rows) |
+| 03 | invalid price abc / -5 / 0 / NaN / blank → exit 1, 0 ticks |
+| 04 | missing symbol/exchange/offset, bad offset, negative volume, backwards offset, extra value, wrong header → exit 1, 0 ticks |
+| 05 | new run: 30 inserted, ids `<run>:000001…000030` |
+| 05b | observed_at = run_start + offset for every row; whole-second start |
+| 06 | same run_id again: 30 DUPLICATE, data unchanged, still 8 events |
+| 06b | interrupted run (rows 1–10) retried with full file: 10 DUPLICATE + 20 INSERTED on one continuous timeline; same 8 events |
+| 07 | new run_id immediately: refused (exit 2, nothing sent); with --start-after-latest: 30 inserted, starts 1 s after previous run, 7 events |
+| 08 | exact (rule, row) set of the 8 expected events |
+| 09 | no events on "stay beyond" / cooldown rows; rule 1 has 2; inactive rule 5 has 0 |
+| 10 | per-instrument tick counts; tick order per instrument = CSV order; every event rule/tick same instrument |
+| 11 | --dry-run: 30 "would send" lines, 0 ticks; works with a non-existent DB name |
+| 12 | unknown instrument at row 2: [SW001], exit 2, row 1 kept, row 3 not sent |
+| 12b | same via real subprocess CLI: exit code 2 |
+| 13 | inactive instrument: [SW002], exit 2, 0 ticks |
+| 14 | DB error (price overflow 22003) at row 2: only row 1 stored; with --continue-on-error row 3 stored and fires alert, exit still 2 |
+| 15 | after a replay, 04_alert_tests.sql (50/50) and 02_schema_tests.sql (51/51) pass on the same DB; replay data untouched |
+
 Concurrency test (separate psql processes on throwaway DB
 stock_watchlist_ctest, dropped afterwards):
 
@@ -412,5 +567,5 @@ stock_watchlist_ctest, dropped afterwards):
 
 ## Not yet implemented
 
-- replay _(Phase 5)_, index benchmark _(Phase 6)_, web app + SSE
-  _(Phase 7)_, Binance _(Phase 8)_
+- index benchmark _(Phase 6)_, web app + SSE _(Phase 7)_,
+  Binance _(Phase 8)_

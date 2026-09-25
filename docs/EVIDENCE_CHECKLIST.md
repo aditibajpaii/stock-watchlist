@@ -220,15 +220,19 @@ Evaluation / viva.
 
 `psql -d stock_watchlist -f sql/05_demo_queries.sql`
 
+It picks its market time T0 = 10 min after the latest stored
+RELIANCE/BTCUSDT tick (or now). It works on a clean database and after
+replays, and shows only its own events.
+
 | Screenshot | Section of the output |
 |---|---|
 | [ ] **34_above-alert-fires.png** | DEMO 1 — 2990 then 3005 → one ABOVE event |
 | [ ] **35_no-repeat-while-above.png** | DEMO 2 — 3010, 3020 → still one event |
 | [ ] **36_cooldown.png** | DEMO 3 — re-cross after 19 s suppressed; re-cross after 329 s fires (2 events) |
-| [ ] **37_duplicate-input.png** | DEMO 4 — status DUPLICATE, 1 tick with that id, total events unchanged |
-| [ ] **38_late-tick.png** | DEMO 5 — 09:14:00 tick stored (first row by time), no BELOW event |
+| [ ] **37_duplicate-input.png** | DEMO 4 — status DUPLICATE, 1 tick with that id, demo events still 2 |
+| [ ] **38_late-tick.png** | DEMO 5 — the T0−60 s tick is stored (first row by time), no BELOW event |
 | [ ] **39_integrity-error.png** | DEMO 6 — ERROR "rule 1 is for instrument 1, but tick … is for instrument 6" |
-| [ ] **40_rollback.png** | DEMO 7 — 10 ticks / 2 events inside, 0 / 0 after ROLLBACK |
+| [ ] **40_rollback.png** | DEMO 7 — 10 ticks / 2 events added inside, 0 / 0 after ROLLBACK |
 
 ### Automated test results
 
@@ -315,6 +319,81 @@ FROM alert_events e JOIN price_ticks t USING (tick_id) ORDER BY e.event_id;
 ```sh
 dropdb stock_watchlist_demo
 ```
+
+## Phase 5 – Offline replay (Python → ingest_tick → alerts)
+
+### Setup (each new terminal)
+```sh
+export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
+cd "/Users/aditi/dbms project"
+source .venv/bin/activate
+```
+First time only (already done on this machine):
+```sh
+python3.13 -m venv .venv
+pip install -r requirements.txt
+```
+
+### Clean demo database (recommended before a classroom demo)
+
+This resets stock_watchlist to seed data, destroying replay and demo
+ticks, so a replay produces exactly 8 alerts:
+```sh
+psql -q -d stock_watchlist -v ON_ERROR_STOP=1 \
+     -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql
+```
+
+### Screenshots
+
+- [ ] **50_replay-dry-run.png** —
+      `python -m app.replay data/replay_prices.csv --dry-run --run-id demo1`
+      (30 "would send" lines with observed_at and source_event_id; no DB
+      changes)
+- [ ] **51_replay-run.png** — the live-looking run, prices arriving one by
+      one:
+      `python -m app.replay data/replay_prices.csv --delay-ms 300 --run-id demo1`
+      Capture the ALERT lines (8) and the summary (Inserted 30, Alerts 8).
+- [ ] **52_replay-duplicate.png** — the same run id again:
+      `python -m app.replay data/replay_prices.csv --run-id demo1`
+      ("Retrying run demo1", 30 × DUPLICATE, Inserted 0)
+- [ ] **53_replay-late-guard.png** — a new run immediately afterwards:
+      `python -m app.replay data/replay_prices.csv --run-id demo2`
+      (refused, with the LATE explanation, exit 2). Optional follow-up:
+      add `--start-after-latest` (30 inserted, 7 alerts).
+- [ ] **54_replay-db-view.png** — in psql, after the run:
+      ```sql
+      -- latest 10 ticks
+      SELECT t.tick_id, i.exchange, i.symbol, t.price, t.volume,
+             t.observed_at, t.source, t.source_event_id
+      FROM price_ticks t JOIN instruments i USING (instrument_id)
+      ORDER BY t.observed_at DESC, t.tick_id DESC LIMIT 10;
+
+      -- alert events created by the replay, with the rule that caused them
+      SELECT e.event_id, u.username, i.symbol, r.direction, r.threshold,
+             r.cooldown_seconds, t.price, t.observed_at, t.source_event_id
+      FROM alert_events e
+      JOIN alert_rules r USING (rule_id)
+      JOIN users u       USING (user_id)
+      JOIN price_ticks t USING (tick_id)
+      JOIN instruments i ON i.instrument_id = t.instrument_id
+      WHERE t.source = 'REPLAY'
+      ORDER BY t.observed_at, e.event_id;
+
+      -- latest price per instrument
+      SELECT DISTINCT ON (i.symbol) i.exchange, i.symbol, t.price, t.observed_at
+      FROM price_ticks t JOIN instruments i USING (instrument_id)
+      ORDER BY i.symbol, t.observed_at DESC, t.tick_id DESC;
+      ```
+- [ ] **55_replay-error.png** — a clear failure for an unknown instrument:
+      ```sh
+      printf 'offset_seconds,exchange,symbol,price,volume\n0,NSE,NOSUCH,100,1\n' > /tmp/bad.csv
+      python -m app.replay /tmp/bad.csv; echo "exit=$?"
+      ```
+      Shows `ERROR [SW001] ingest_tick: unknown instrument NSE:NOSUCH` and
+      `exit=2`.
+- [ ] **56_replay-tests.png** — `python -m unittest tests.test_replay -v`
+      (18 tests, OK). They use throwaway databases; stock_watchlist is not
+      touched.
 
 ## Later phases (not yet available)
 

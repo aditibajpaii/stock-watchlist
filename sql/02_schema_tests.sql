@@ -342,7 +342,12 @@ SELECT (SELECT count(*) FROM price_ticks) AS ticks,
        (SELECT count(*) FROM watchlists   WHERE user_id <> pg_temp.uid('arjun')) AS other_lists,
        (SELECT count(*) FROM watchlist_items wi JOIN watchlists w USING (watchlist_id)
          WHERE w.user_id = pg_temp.uid('priya') AND w.name = 'Tech') AS tech_items,
-       pg_temp.uid('arjun') AS arjun_id;
+       pg_temp.uid('arjun') AS arjun_id,
+       (SELECT array_agg(rule_id) FROM alert_rules WHERE user_id = pg_temp.uid('arjun')) AS arjun_rules,
+       (SELECT count(*) FROM alert_events e JOIN alert_rules r USING (rule_id)
+         WHERE r.user_id = pg_temp.uid('arjun')) AS arjun_events,
+       (SELECT count(*) FROM alert_events e JOIN alert_rules r USING (rule_id)
+         WHERE r.user_id <> pg_temp.uid('arjun')) AS other_events;
 
 -- E1-E2: deleting a watchlist removes only its items
 SELECT pg_temp.expect_ok('E0 delete watchlist priya/Tech succeeds',
@@ -373,7 +378,11 @@ SELECT pg_temp.expect_true('E5 user delete cascades to alert rules',
   $q$ SELECT NOT EXISTS (SELECT 1 FROM alert_rules WHERE user_id = (SELECT arjun_id FROM snap)) $q$);
 
 SELECT pg_temp.expect_true('E6 user delete cascades to alert events (via rules)',
-  $q$ SELECT count(*) = 0 FROM alert_events $q$);
+  $q$ SELECT (SELECT arjun_events FROM snap) > 0
+         AND NOT EXISTS (SELECT 1 FROM alert_events
+                         WHERE rule_id IN (SELECT unnest(arjun_rules) FROM snap))
+         AND (SELECT count(*) FROM alert_events) = (SELECT other_events FROM snap) $q$);
+-- (works on a freshly seeded DB and on one that already holds replay data)
 
 SELECT pg_temp.expect_true('E7 user delete keeps ALL price ticks',
   $q$ SELECT count(*) = (SELECT ticks FROM snap) FROM price_ticks $q$);

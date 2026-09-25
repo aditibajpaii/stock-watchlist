@@ -152,6 +152,16 @@ Indexes:
   cover some queries. Further indexes are designed from real queries and
   EXPLAIN output only.
 
+## How to run (current state)
+
+- psql: `export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"`; dev DB
+  `stock_watchlist`; rebuild = 00_schema → 01_seed → 03_functions_triggers
+- Python: project venv `.venv/` (Python 3.13, psycopg 3.3.6 only);
+  replay = `python -m app.replay data/replay_prices.csv`
+- Tests: sql/02_schema_tests.sql, sql/verify_spec.sql, sql/04_alert_tests.sql,
+  `bash tests/concurrency_test.sh`, `python -m unittest tests.test_replay -v`
+  (Python/concurrency tests use throwaway DBs, never the dev DB)
+
 ## Working rules
 
 Phases:

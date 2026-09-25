@@ -230,6 +230,142 @@ and harmless; ids are identifiers, not counters.
 
 ---
 
+## Phase 5 – Offline replay
+
+### 16. Why replay through ingest_tick instead of INSERT?
+
+WHY: the replay must exercise the same path as the future live feed, and
+ingest_tick holds the rules (lock, duplicate handling, instrument checks).
+VIVA: "Your Python program could just INSERT into price_ticks. Why call a
+function?"
+ANSWER: A plain INSERT would skip the instrument lock (Phase 4 showed that
+causes duplicate alerts under concurrency) and give no clean DUPLICATE
+result. Calling ingest_tick means the database decides, and replay,
+Binance and manual input all behave the same.
+
+### 17. Why does each replay run have a run_id?
+
+WHY: a tick's identity is (source, instrument, source_event_id), so replay
+event ids need something that tells one run apart from another.
+VIVA: "What is the run_id for?"
+ANSWER: source_event_id = run_id + ':' + row number. Within one run, row 7
+always has the same id, so a retry can't insert it twice. A different run
+has different ids, so its rows are new events.
+
+### 18. Why can the same CSV be replayed more than once?
+
+WHY: a replay represents a new stream of market events each time you
+deliberately start it.
+VIVA: "If I replay the same file twice, are those duplicates?"
+ANSWER: Not if it's a new intentional run. The new UUID run_id gives new
+source_event_ids, and new timestamps (run start = now), so they are new
+events. By design they are stored and can fire alerts again.
+
+### 19. Why does retrying one run produce DUPLICATE?
+
+WHY: after a crash or network problem you must be able to resend safely.
+VIVA: "The replay stopped at row 10. You restart it. What happens to rows
+1–10?"
+ANSWER: Restart with the same --run-id. Rows 1–10 have the same
+source_event_ids, so the UNIQUE constraint makes ingest_tick return
+DUPLICATE. Nothing is stored twice and no alert repeats. Rows 11–30 are
+inserted on the original timeline, because the program recovers the
+original run start from row 1's stored tick (test 06b).
+
+### 20. Why rebase timestamps (observed_at = run_start + offset)?
+
+WHY: the alert engine treats older market times as "late" and ignores
+them.
+VIVA: "Why not store fixed historical timestamps in the CSV?"
+ANSWER: The second replay of fixed timestamps would be older than ticks
+already stored, so every tick would be late and no alert would fire.
+Rebasing makes each run behave like a live stream starting now. The
+offsets keep the spacing between events, and cooldowns are measured on
+it.
+
+Follow-up: "What if you start a new run while the previous run's ticks
+are still in the future?"
+- Their ticks run up to run_start + 460 s, so a new run inside that
+  window would start "in the past" and all its ticks would be late.
+- The program detects this and refuses with an explanation.
+  --start-after-latest starts 1 s after the last stored tick instead.
+
+Follow-up: "Why doesn't --delay-ms depend on the offsets?"
+- The offset is logical market time, and the delay is how long a human
+  waits.
+- A 460 s logical feed can be shown in 9 s with --delay-ms 300, and
+  alerts and cooldowns still behave as if 460 s passed.
+
+### 21. Why is replay useful when a live feed exists?
+
+WHY: a demo must not depend on the internet, market hours or luck.
+VIVA: "Why build a replay at all?"
+ANSWER:
+- It works offline, when markets are closed, and gives the same prices
+  every time, so we know in advance which 8 alerts fire and can test that
+  automatically.
+- A live feed can't guarantee a crossing during a 10-minute viva.
+- Both use the same ingest_tick path, so a working replay also shows the
+  live path works.
+
+### 22. Why still need database constraints if Python validates input?
+
+WHY: the database is the last line of defence, and Python is only one of
+several clients.
+VIVA: "Python already rejects negative prices. Isn't the CHECK constraint
+redundant?"
+ANSWER:
+- Python validation gives early, friendly errors (whole file checked, 0
+  rows sent).
+- But psql users, the future web app and the Binance feed don't run this
+  Python code, and Python doesn't know every limit. Test 14:
+  999999999999 passed Python validation but the database rejected it
+  (NUMERIC(18,8) overflow, SQLSTATE 22003).
+- Constraints guarantee the rule for every client.
+
+### 23. Why one transaction per event?
+
+WHY: short transactions mean prompt visibility and short lock times.
+VIVA: "Why not load all 30 rows in one transaction? It would be faster."
+ANSWER:
+- One transaction per row means each price and its alerts are visible,
+  and the NOTIFY delivered, as soon as that row commits, which is what a
+  live UI needs.
+- ingest_tick's instrument lock is held for milliseconds, not the whole
+  file.
+- A bad row rolls back only itself.
+- Also, one transaction around rows of the same instrument would keep
+  that lock until the end of the file.
+
+Follow-up: "What happens on an error?" That event rolls back, the error
+and its SQLSTATE are printed, the replay stops and exits with code 2.
+Rows already committed stay; they were independent events.
+(--continue-on-error keeps going but still exits 2.)
+
+### 24. Why does the second back-to-back run give 7 alerts, not 8?
+
+WHY: market history is continuous across runs.
+VIVA: "Same file, same rules. Why a different alert count?"
+ANSWER: Cooldown is measured from the last alert's market time, even if
+that alert came from the previous run.
+- The previous run's last rule-1 alert is its row 27, at +400 s.
+- The new run starts 1 s after the previous run's last tick (+460 s), so
+  its row 6 (+20 s) is at previous +481 s.
+- The gap is 481 − 400 = 81 s, inside rule 1's 300 s cooldown, so row 6
+  is suppressed.
+- On a freshly seeded DB there is no earlier alert, so all 8 fire.
+
+### 25. Why no password in the code?
+
+WHY: secrets must never be committed.
+VIVA: "How does the program connect to the database?"
+ANSWER: From environment variables (DB_NAME, DB_HOST, DB_PORT, DB_USER),
+with local defaults. The local server trusts local connections, so no
+password exists. If one were needed, libpq reads PGPASSWORD or
+~/.pgpass, which are never stored in the repository.
+
+---
+
 ## Quick-fire drill
 
 1. Which table row does ingest_tick lock? *The instruments row of that
@@ -246,3 +382,8 @@ and harmless; ids are identifiers, not counters.
    on alert_events).*
 8. What did the control concurrency test show? *Without the lock, one
    crossing produced two alerts.*
+9. source_event_id format for replay? *`<run_id>:<6-digit row>`.*
+10. How is observed_at computed in replay? *run_start + offset_seconds.*
+11. Same run_id rerun → ? *All rows DUPLICATE.*
+12. Exit codes of the replay? *0 ok, 1 bad CSV/arguments, 2 DB error.*
+13. How many alerts does one demo replay create on a fresh DB? *8.*
