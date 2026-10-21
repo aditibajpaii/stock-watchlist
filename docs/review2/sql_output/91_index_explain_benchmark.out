@@ -1,0 +1,160 @@
+================ DATA ================
+ price_ticks_rows | instruments | table_size | table_plus_indexes 
+------------------+-------------+------------+--------------------
+           500000 |          20 | 48 MB      | 120 MB
+
+
+================ INDEXES ON price_ticks ================
+           index_name           | size  |                                                          definition                                                           
+--------------------------------+-------+-------------------------------------------------------------------------------------------------------------------------------
+ pk_price_ticks                 | 11 MB | CREATE UNIQUE INDEX pk_price_ticks ON public.price_ticks USING btree (tick_id)
+ uq_price_ticks_source_event    | 42 MB | CREATE UNIQUE INDEX uq_price_ticks_source_event ON public.price_ticks USING btree (source, instrument_id, source_event_id)
+ ix_price_ticks_instrument_time | 19 MB | CREATE INDEX ix_price_ticks_instrument_time ON public.price_ticks USING btree (instrument_id, observed_at DESC, tick_id DESC)
+
+
+################ WITHOUT ix_price_ticks_instrument_time ################
+---- A. latest 50 ticks for one instrument
+                                                                          QUERY PLAN                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=8427.17..8427.29 rows=50 width=27) (actual time=313.383..313.391 rows=50.00 loops=1)
+   Buffers: shared hit=6380
+   ->  Sort  (cost=8427.17..8488.29 rows=24450 width=27) (actual time=313.382..313.386 rows=50.00 loops=1)
+         Sort Key: observed_at DESC, tick_id DESC
+         Sort Method: top-N heapsort  Memory: 32kB
+         Buffers: shared hit=6380
+         ->  Bitmap Heap Scan on price_ticks  (cost=1214.33..7614.96 rows=24450 width=27) (actual time=9.551..306.115 rows=25000.00 loops=1)
+               Recheck Cond: (instrument_id = 1)
+               Heap Blocks: exact=6095
+               Buffers: shared hit=6374
+               ->  Bitmap Index Scan on uq_price_ticks_source_event  (cost=0.00..1208.22 rows=24450 width=0) (actual time=8.902..8.903 rows=25010.00 loops=1)
+                     Index Cond: (instrument_id = 1)
+                     Index Searches: 2
+                     Buffers: shared hit=279
+ Planning:
+   Buffers: shared hit=20
+ Planning Time: 0.198 ms
+ Execution Time: 313.418 ms
+
+---- B. 30-minute history for one instrument
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=7775.31..7777.55 rows=897 width=27) (actual time=26.725..26.754 rows=900.00 loops=1)
+   Sort Key: observed_at, tick_id
+   Sort Method: quicksort  Memory: 67kB
+   Buffers: shared hit=6372
+   ->  Bitmap Heap Scan on price_ticks  (cost=1208.44..7731.32 rows=897 width=27) (actual time=16.499..26.575 rows=900.00 loops=1)
+         Recheck Cond: (instrument_id = 1)
+         Filter: ((observed_at >= '2026-01-05 16:11:39.1+05:30'::timestamp with time zone) AND (observed_at < '2026-01-05 16:41:39.1+05:30'::timestamp with time zone))
+         Rows Removed by Filter: 24100
+         Heap Blocks: exact=6095
+         Buffers: shared hit=6372
+         ->  Bitmap Index Scan on uq_price_ticks_source_event  (cost=0.00..1208.22 rows=24450 width=0) (actual time=1.729..1.729 rows=25010.00 loops=1)
+               Index Cond: (instrument_id = 1)
+               Index Searches: 2
+               Buffers: shared hit=277
+ Planning:
+   Buffers: shared hit=3
+ Planning Time: 0.121 ms
+ Execution Time: 26.805 ms
+
+---- C. previous-tick lookup (alert trigger)
+                                                                          QUERY PLAN                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=7795.33..7795.33 rows=1 width=22) (actual time=12.717..12.718 rows=1.00 loops=1)
+   Buffers: shared hit=6372
+   ->  Sort  (cost=7795.33..7825.92 rows=12235 width=22) (actual time=12.716..12.716 rows=1.00 loops=1)
+         Sort Key: observed_at DESC, tick_id DESC
+         Sort Method: top-N heapsort  Memory: 25kB
+         Buffers: shared hit=6372
+         ->  Bitmap Heap Scan on price_ticks t  (cost=1211.28..7734.15 rows=12235 width=22) (actual time=3.279..11.493 rows=12500.00 loops=1)
+               Recheck Cond: (instrument_id = 1)
+               Filter: (ROW(observed_at, tick_id) < ROW('2026-01-05 16:11:40.1+05:30'::timestamp with time zone, 250001))
+               Rows Removed by Filter: 12500
+               Heap Blocks: exact=6095
+               Buffers: shared hit=6372
+               ->  Bitmap Index Scan on uq_price_ticks_source_event  (cost=0.00..1208.22 rows=24450 width=0) (actual time=2.521..2.521 rows=25010.00 loops=1)
+                     Index Cond: (instrument_id = 1)
+                     Index Searches: 2
+                     Buffers: shared hit=277
+ Planning Time: 0.101 ms
+ Execution Time: 12.752 ms
+
+---- E. late-tick check (alert trigger), new tick is the latest
+                                                                        QUERY PLAN                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Result  (cost=4439.10..4439.11 rows=1 width=1) (actual time=67.133..67.133 rows=1.00 loops=1)
+   Buffers: shared hit=6372
+   InitPlan 1
+     ->  Bitmap Heap Scan on price_ticks t  (cost=1208.22..7669.97 rows=2 width=0) (actual time=67.129..67.129 rows=0.00 loops=1)
+           Recheck Cond: (instrument_id = 1)
+           Filter: (observed_at > '2026-01-05 23:08:18.1+05:30'::timestamp with time zone)
+           Rows Removed by Filter: 25000
+           Heap Blocks: exact=6095
+           Buffers: shared hit=6372
+           ->  Bitmap Index Scan on uq_price_ticks_source_event  (cost=0.00..1208.22 rows=24450 width=0) (actual time=1.703..1.703 rows=25010.00 loops=1)
+                 Index Cond: (instrument_id = 1)
+                 Index Searches: 2
+                 Buffers: shared hit=277
+ Planning Time: 0.100 ms
+ Execution Time: 67.157 ms
+
+
+################ WITH ix_price_ticks_instrument_time ################
+---- A. latest 50 ticks for one instrument
+                                                                          QUERY PLAN                                                                           
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..52.10 rows=50 width=27) (actual time=0.013..0.031 rows=50.00 loops=1)
+   Buffers: shared hit=16
+   ->  Index Scan using ix_price_ticks_instrument_time on price_ticks  (cost=0.42..25270.92 rows=24450 width=27) (actual time=0.013..0.027 rows=50.00 loops=1)
+         Index Cond: (instrument_id = 1)
+         Index Searches: 1
+         Buffers: shared hit=16
+ Planning:
+   Buffers: shared hit=23
+ Planning Time: 0.315 ms
+ Execution Time: 0.044 ms
+
+---- B. 30-minute history for one instrument
+                                                                                                QUERY PLAN                                                                                                
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=2506.70..2508.95 rows=897 width=27) (actual time=19.042..19.071 rows=900.00 loops=1)
+   Sort Key: observed_at, tick_id
+   Sort Method: quicksort  Memory: 67kB
+   Buffers: shared hit=228
+   ->  Bitmap Heap Scan on price_ticks  (cost=31.86..2462.71 rows=897 width=27) (actual time=0.085..18.939 rows=900.00 loops=1)
+         Recheck Cond: ((instrument_id = 1) AND (observed_at >= '2026-01-05 16:11:39.1+05:30'::timestamp with time zone) AND (observed_at < '2026-01-05 16:41:39.1+05:30'::timestamp with time zone))
+         Heap Blocks: exact=221
+         Buffers: shared hit=228
+         ->  Bitmap Index Scan on ix_price_ticks_instrument_time  (cost=0.00..31.64 rows=897 width=0) (actual time=0.055..0.055 rows=900.00 loops=1)
+               Index Cond: ((instrument_id = 1) AND (observed_at >= '2026-01-05 16:11:39.1+05:30'::timestamp with time zone) AND (observed_at < '2026-01-05 16:41:39.1+05:30'::timestamp with time zone))
+               Index Searches: 1
+               Buffers: shared hit=7
+ Planning Time: 0.157 ms
+ Execution Time: 19.137 ms
+
+---- C. previous-tick lookup (alert trigger)
+                                                                           QUERY PLAN                                                                           
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..2.45 rows=1 width=22) (actual time=0.018..0.018 rows=1.00 loops=1)
+   Buffers: shared hit=4
+   ->  Index Scan using ix_price_ticks_instrument_time on price_ticks t  (cost=0.42..24843.59 rows=12235 width=22) (actual time=0.017..0.017 rows=1.00 loops=1)
+         Index Cond: ((instrument_id = 1) AND (ROW(observed_at, tick_id) < ROW('2026-01-05 16:11:40.1+05:30'::timestamp with time zone, 250001)))
+         Index Searches: 1
+         Buffers: shared hit=4
+ Planning Time: 0.093 ms
+ Execution Time: 0.030 ms
+
+---- E. late-tick check (alert trigger), new tick is the latest
+                                                                          QUERY PLAN                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Result  (cost=4.44..4.45 rows=1 width=1) (actual time=0.012..0.012 rows=1.00 loops=1)
+   Buffers: shared hit=3
+   InitPlan 1
+     ->  Index Only Scan using ix_price_ticks_instrument_time on price_ticks t  (cost=0.42..8.46 rows=2 width=0) (actual time=0.011..0.011 rows=0.00 loops=1)
+           Index Cond: ((instrument_id = 1) AND (observed_at > '2026-01-05 23:08:18.1+05:30'::timestamp with time zone))
+           Heap Fetches: 0
+           Index Searches: 1
+           Buffers: shared hit=3
+ Planning Time: 0.042 ms
+ Execution Time: 0.018 ms
+

@@ -1,0 +1,20 @@
+Chen diagram docs/review2/ER_CHEN_PRESENTATION.svg compared element by element with the verified model
+   OK       entity types: ALERT_EVENT, ALERT_RULE, INSTRUMENT, PRICE_TICK, USER, WATCHLIST
+   OK       relationship types: CONTAINS, CREATES, GENERATES, HAS_TICK, MONITORS, OWNS, TRIGGERED_BY
+   OK       30 attributes with owner and key underline match the model
+   OK       CONTAINS     side INSTRUMENT   cardinality N, partial (single line)
+   OK       CONTAINS     side WATCHLIST    cardinality M, partial (single line)
+   OK       CREATES      side ALERT_RULE   cardinality N, total (double line)
+   OK       CREATES      side USER         cardinality 1, partial (single line)
+   OK       GENERATES    side ALERT_EVENT  cardinality N, total (double line)
+   OK       GENERATES    side ALERT_RULE   cardinality 1, partial (single line)
+   OK       HAS_TICK     side INSTRUMENT   cardinality 1, partial (single line)
+   OK       HAS_TICK     side PRICE_TICK   cardinality N, total (double line)
+   OK       MONITORS     side ALERT_RULE   cardinality N, total (double line)
+   OK       MONITORS     side INSTRUMENT   cardinality 1, partial (single line)
+   OK       OWNS         side USER         cardinality 1, partial (single line)
+   OK       OWNS         side WATCHLIST    cardinality N, total (double line)
+   OK       TRIGGERED_BY side ALERT_EVENT  cardinality N, total (double line)
+   OK       TRIGGERED_BY side PRICE_TICK   cardinality 1, partial (single line)
+   OK       14 relationship sides drawn, 14 expected
+RESULT: diagram content matches the verified model

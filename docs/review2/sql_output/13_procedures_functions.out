@@ -1,0 +1,237 @@
+===== 1. Existing routines in schema public (prokind f = function, p = procedure) =====
+SELECT p.proname AS routine,
+       CASE p.prokind WHEN 'f' THEN 'FUNCTION' WHEN 'p' THEN 'PROCEDURE' END AS kind,
+       pg_get_function_result(p.oid) AS returns,
+       p.prorettype = 'trigger'::regtype AS is_trigger_function,
+       CASE WHEN p.prorettype = 'trigger'::regtype
+            THEN 'runs only when its trigger fires'
+            ELSE 'callable: SELECT * FROM ' || p.proname || '(...)' END AS how_it_runs
+FROM pg_proc p
+WHERE p.pronamespace = 'public'::regnamespace
+ORDER BY kind, routine;
+           routine            |   kind   |              returns               | is_trigger_function |               how_it_runs                
+------------------------------+----------+------------------------------------+---------------------+------------------------------------------
+ check_alert_event_instrument | FUNCTION | trigger                            | t                   | runs only when its trigger fires
+ evaluate_price_alerts        | FUNCTION | trigger                            | t                   | runs only when its trigger fires
+ ingest_tick                  | FUNCTION | TABLE(status text, tick_id bigint) | f                   | callable: SELECT * FROM ingest_tick(...)
+(3 rows)
+
+>>> EXPECTED ERROR [0A000] a trigger function cannot be called directly
+SELECT evaluate_price_alerts();
+psql:sql/review2/13_procedures_functions.sql:28: ERROR:  trigger functions can only be called as triggers
+CONTEXT:  compilation of PL/pgSQL function "evaluate_price_alerts" near line 1
+<<< actual SQLSTATE: 0A000
+===== 2a. FUNCTION review2.fn_latest_price(instrument_id) =====
+CREATE OR REPLACE FUNCTION review2.fn_latest_price(p_instrument_id BIGINT)
+RETURNS NUMERIC
+LANGUAGE sql
+STABLE
+AS $$
+    -- Latest tick by market time; ties broken by tick_id, the same order
+    -- the alert trigger and ix_price_ticks_instrument_time use.
+    SELECT t.price
+    FROM price_ticks t
+    WHERE t.instrument_id = p_instrument_id
+    ORDER BY t.observed_at DESC, t.tick_id DESC
+    LIMIT 1;
+$$;
+COMMENT ON FUNCTION review2.fn_latest_price(BIGINT) IS
+    'Latest price of an instrument, NULL if it has no ticks.';
+SELECT i.symbol, review2.fn_latest_price(i.instrument_id) AS latest_price
+FROM instruments i
+ORDER BY i.symbol;
+  symbol  |  latest_price   
+----------+-----------------
+ BTCUSDT  | 100400.00000000
+ ETHUSDT  |   2994.60000000
+ HDFCBANK |          (null)
+ INFY     |   1612.00000000
+ M&M      |          (null)
+ RELIANCE |   2788.00000000
+ TCS      |   3490.00000000
+(7 rows)
+
+===== 2b. FUNCTION review2.fn_rule_distance_pct(rule_id) =====
+CREATE OR REPLACE FUNCTION review2.fn_rule_distance_pct(p_rule_id BIGINT)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_direction TEXT;
+    v_threshold NUMERIC;
+    v_latest    NUMERIC;
+BEGIN
+    SELECT r.direction, r.threshold, review2.fn_latest_price(r.instrument_id)
+    INTO v_direction, v_threshold, v_latest
+    FROM alert_rules r
+    WHERE r.rule_id = p_rule_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'fn_rule_distance_pct: rule % does not exist', p_rule_id
+        USING ERRCODE = 'no_data_found';
+    END IF;
+    IF v_latest IS NULL THEN
+        RETURN NULL;                     -- no price yet
+    END IF;
+
+    -- Positive: the price must still move this many % towards the
+    -- threshold before the rule can fire. Zero or negative: the price is
+    -- already on (or past) the threshold side.
+    RETURN round(100 * CASE v_direction
+                           WHEN 'ABOVE' THEN v_threshold - v_latest
+                           ELSE v_latest - v_threshold
+                       END / v_latest, 2);
+END;
+$$;
+COMMENT ON FUNCTION review2.fn_rule_distance_pct(BIGINT) IS
+    'Signed % distance from the latest price to a rule threshold (> 0: still has to move).';
+SELECT r.rule_id, r.direction, r.threshold, r.is_active,
+       review2.fn_rule_distance_pct(r.rule_id) AS distance_pct
+FROM alert_rules r
+ORDER BY r.rule_id;
+ rule_id | direction |    threshold    | is_active | distance_pct 
+---------+-----------+-----------------+-----------+--------------
+       1 | ABOVE     |   3000.00000000 | t         |         7.60
+       2 | BELOW     |   2800.00000000 | t         |        -0.43
+       3 | ABOVE     | 100000.00000000 | t         |        -0.40
+       4 | BELOW     |   3500.00000000 | t         |        -0.29
+       5 | ABOVE     |   1600.00000000 | f         |        -0.74
+       6 | BELOW     |   3000.00000000 | t         |        -0.18
+(6 rows)
+
+>>> EXPECTED ERROR [P0002] unknown rule id
+SELECT review2.fn_rule_distance_pct(999);
+psql:sql/review2/13_procedures_functions.sql:97: ERROR:  fn_rule_distance_pct: rule 999 does not exist
+CONTEXT:  PL/pgSQL function review2.fn_rule_distance_pct(bigint) line 13 at RAISE
+<<< actual SQLSTATE: P0002
+===== 3a. PROCEDURE review2.sp_add_watchlist_item(username, watchlist, exchange, symbol) =====
+CREATE OR REPLACE PROCEDURE review2.sp_add_watchlist_item(
+    p_username  TEXT,
+    p_watchlist TEXT,
+    p_exchange  TEXT,
+    p_symbol    TEXT)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_watchlist_id  BIGINT;
+    v_instrument_id BIGINT;
+BEGIN
+    SELECT w.watchlist_id INTO v_watchlist_id
+    FROM watchlists w JOIN users u ON u.user_id = w.user_id
+    WHERE u.username = p_username AND w.name = p_watchlist;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'no watchlist "%" for user %', p_watchlist, p_username
+        USING ERRCODE = 'no_data_found';
+    END IF;
+
+    SELECT i.instrument_id INTO v_instrument_id
+    FROM instruments i
+    WHERE i.exchange = p_exchange AND i.symbol = p_symbol;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'unknown instrument %:%', p_exchange, p_symbol
+        USING ERRCODE = 'no_data_found';
+    END IF;
+
+    INSERT INTO watchlist_items (watchlist_id, instrument_id)
+    VALUES (v_watchlist_id, v_instrument_id)
+    ON CONFLICT ON CONSTRAINT pk_watchlist_items DO NOTHING;
+
+    IF FOUND THEN
+        RAISE NOTICE 'added %:% to %/%', p_exchange, p_symbol, p_username, p_watchlist;
+    ELSE
+        RAISE NOTICE '%:% is already in %/% - nothing changed', p_exchange, p_symbol, p_username, p_watchlist;
+    END IF;
+END;
+$$;
+===== 3b. PROCEDURE review2.sp_set_rule_active(rule_id, active, INOUT previous) =====
+CREATE OR REPLACE PROCEDURE review2.sp_set_rule_active(
+    p_rule_id  BIGINT,
+    p_active   BOOLEAN,
+    INOUT p_previous BOOLEAN DEFAULT NULL)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    SELECT is_active INTO p_previous
+    FROM alert_rules WHERE rule_id = p_rule_id
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'rule % does not exist', p_rule_id
+        USING ERRCODE = 'no_data_found';
+    END IF;
+
+    UPDATE alert_rules SET is_active = p_active WHERE rule_id = p_rule_id;
+    RAISE NOTICE 'rule %: is_active % -> %', p_rule_id, p_previous, p_active;
+END;
+$$;
+===== Routines now in schema review2 =====
+SELECT p.proname AS routine,
+       CASE p.prokind WHEN 'f' THEN 'FUNCTION' WHEN 'p' THEN 'PROCEDURE' END AS kind,
+       pg_get_function_arguments(p.oid) AS arguments,
+       pg_get_function_result(p.oid)    AS returns
+FROM pg_proc p
+WHERE p.pronamespace = 'review2'::regnamespace
+ORDER BY kind, routine;
+        routine        |   kind    |                                        arguments                                         | returns 
+-----------------------+-----------+------------------------------------------------------------------------------------------+---------
+ fn_latest_price       | FUNCTION  | p_instrument_id bigint                                                                   | numeric
+ fn_rule_distance_pct  | FUNCTION  | p_rule_id bigint                                                                         | numeric
+ sp_add_watchlist_item | PROCEDURE | IN p_username text, IN p_watchlist text, IN p_exchange text, IN p_symbol text            | (null)
+ sp_set_rule_active    | PROCEDURE | IN p_rule_id bigint, IN p_active boolean, INOUT p_previous boolean DEFAULT NULL::boolean | (null)
+(4 rows)
+
+===== Calling the procedures (transaction rolled back at the end) =====
+BEGIN;
+kavya receives ETHUSDT alerts but does not watch it (CQ08); add it to "Main":
+CALL review2.sp_add_watchlist_item('kavya', 'Main', 'BINANCE', 'ETHUSDT');
+psql:sql/review2/13_procedures_functions.sql:175: NOTICE:  added BINANCE:ETHUSDT to kavya/Main
+SELECT watchlist, symbol FROM review2.v_watchlist_contents WHERE username = 'kavya' ORDER BY symbol;
+ watchlist |  symbol  
+-----------+----------
+ Main      | BTCUSDT
+ Main      | ETHUSDT
+ Main      | INFY
+ Main      | RELIANCE
+(4 rows)
+
+calling it again changes nothing (ON CONFLICT DO NOTHING):
+CALL review2.sp_add_watchlist_item('kavya', 'Main', 'BINANCE', 'ETHUSDT');
+psql:sql/review2/13_procedures_functions.sql:178: NOTICE:  BINANCE:ETHUSDT is already in kavya/Main - nothing changed
+re-enable priya INFY rule 5; the INOUT parameter returns the previous state:
+CALL review2.sp_set_rule_active(5, true);
+psql:sql/review2/13_procedures_functions.sql:181: NOTICE:  rule 5: is_active f -> t
+ p_previous 
+------------
+ f
+(1 row)
+
+SELECT rule_id, is_active FROM alert_rules WHERE rule_id = 5;
+ rule_id | is_active 
+---------+-----------
+       5 | t
+(1 row)
+
+SAVEPOINT before_bad_call;
+>>> EXPECTED ERROR [P0002] unknown instrument
+CALL review2.sp_add_watchlist_item('kavya', 'Main', 'NSE', 'NOSUCH');
+psql:sql/review2/13_procedures_functions.sql:187: ERROR:  unknown instrument NSE:NOSUCH
+CONTEXT:  PL/pgSQL function review2.sp_add_watchlist_item(text,text,text,text) line 18 at RAISE
+<<< actual SQLSTATE: P0002
+ROLLBACK TO SAVEPOINT before_bad_call;
+>>> EXPECTED ERROR [42809] a procedure is not called with SELECT (wrong_object_type: use CALL)
+SELECT review2.sp_set_rule_active(5, false);
+psql:sql/review2/13_procedures_functions.sql:191: ERROR:  review2.sp_set_rule_active(integer, boolean) is a procedure
+LINE 1: SELECT review2.sp_set_rule_active(5, false);
+               ^
+HINT:  To call a procedure, use CALL.
+<<< actual SQLSTATE: 42809
+ROLLBACK;
+===== After ROLLBACK: kavya Main and rule 5 are unchanged =====
+SELECT (SELECT count(*) FROM watchlist_items wi JOIN watchlists w USING (watchlist_id)
+         JOIN users u USING (user_id) WHERE u.username = 'kavya') AS kavya_items,
+       (SELECT is_active FROM alert_rules WHERE rule_id = 5)       AS rule5_is_active;
+ kavya_items | rule5_is_active 
+-------------+-----------------
+           3 | f
+(1 row)
+

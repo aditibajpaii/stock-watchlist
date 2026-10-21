@@ -1,0 +1,78 @@
+===== 1. Authentication rules of the temporary server (pg_hba.conf, comments removed) =====
+local   all             all                                     scram-sha-256
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256
+local   replication     all                                     scram-sha-256
+host    replication     all             127.0.0.1/32            scram-sha-256
+host    replication     all             ::1/128                 scram-sha-256
+
+===== Roles: r2_analyst may log in; r2_support has a password but NOLOGIN; passwords stored as SCRAM verifiers =====
+  rolname   | rolcanlogin | rolsuper | stored_password_format 
+------------+-------------+----------+------------------------
+ r2_analyst | t           | f        | SCRAM-SHA-256
+ r2_support | f           | f        | SCRAM-SHA-256
+(2 rows)
+
+
+===== 2. No password =====
+>>> EXPECTED CONNECTION RESULT [2]: no password supplied -> refused
+psql: error: connection to server at "127.0.0.1", port 55217 failed: fe_sendauth: no password supplied
+<<< psql exit code: 2
+
+===== 3. Wrong password =====
+>>> EXPECTED CONNECTION RESULT [2]: wrong password -> FATAL password authentication failed
+psql: error: connection to server at "127.0.0.1", port 55217 failed: FATAL:  password authentication failed for user "r2_analyst"
+<<< psql exit code: 2
+
+===== 4. Correct password, but the role is NOLOGIN =====
+>>> EXPECTED CONNECTION RESULT [2]: r2_support (NOLOGIN) -> FATAL role is not permitted to log in
+psql: error: connection to server at "127.0.0.1", port 55217 failed: FATAL:  role "r2_support" is not permitted to log in
+<<< psql exit code: 2
+
+===== 5. Correct password: authenticated restricted session, then forbidden operations =====
+>>> EXPECTED CONNECTION RESULT [0]: r2_analyst with the correct password -> session opens; probe runs
+===== Who is connected, and how was the connection authenticated? =====
+SELECT session_user, current_user, system_user AS authenticated_as,
+       (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS is_superuser;
+ session_user | current_user |     authenticated_as     | is_superuser 
+--------------+--------------+--------------------------+--------------
+ r2_analyst   | r2_analyst   | scram-sha-256:r2_analyst | f
+(1 row)
+
+===== Allowed: the aggregated view (no user data in it) =====
+SELECT symbol, ticks, alerts FROM review2.v_instrument_activity ORDER BY symbol;
+  symbol  | ticks | alerts 
+----------+-------+--------
+ BTCUSDT  |     8 |      2
+ ETHUSDT  |     2 |      1
+ HDFCBANK |     0 |      0
+ INFY     |     2 |      0
+ M&M      |     0 |      0
+ RELIANCE |    12 |      3
+ TCS      |     6 |      2
+(7 rows)
+
+>>> EXPECTED ERROR [42501] the users table (emails) is not readable
+SELECT username, email FROM users;
+psql:sql/review2/18_login_probe.sql:31: ERROR:  permission denied for table users
+<<< actual SQLSTATE: 42501
+>>> EXPECTED ERROR [42501] price ticks cannot be written directly
+INSERT INTO price_ticks (instrument_id, observed_at, price, source, source_event_id)
+VALUES (1, now(), 1, 'MANUAL', 'r2-probe-1');
+psql:sql/review2/18_login_probe.sql:36: ERROR:  permission denied for table price_ticks
+<<< actual SQLSTATE: 42501
+>>> EXPECTED ERROR [42501] the support procedure cannot be called
+CALL review2.sp_set_rule_active(4, false);
+psql:sql/review2/18_login_probe.sql:40: ERROR:  permission denied for procedure sp_set_rule_active
+<<< actual SQLSTATE: 42501
+>>> EXPECTED ERROR [42501] no privilege escalation: SET ROLE to a role it is not a member of
+SET ROLE r2_support;
+psql:sql/review2/18_login_probe.sql:44: ERROR:  permission denied to set role "r2_support"
+<<< actual SQLSTATE: 42501
+>>> EXPECTED ERROR [42501] no new tables in schema public (PostgreSQL 15+ default)
+CREATE TABLE public.r2_probe (x INT);
+psql:sql/review2/18_login_probe.sql:48: ERROR:  permission denied for schema public
+LINE 1: CREATE TABLE public.r2_probe (x INT);
+                     ^
+<<< actual SQLSTATE: 42501
+<<< psql exit code: 0

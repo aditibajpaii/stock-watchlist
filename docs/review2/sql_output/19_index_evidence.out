@@ -1,0 +1,98 @@
+===== Table description, including its indexes =====
+                                    Table "public.price_ticks"
+     Column      |           Type           | Collation | Nullable |           Default            
+-----------------+--------------------------+-----------+----------+------------------------------
+ tick_id         | bigint                   |           | not null | generated always as identity
+ instrument_id   | bigint                   |           | not null | 
+ observed_at     | timestamp with time zone |           | not null | 
+ price           | numeric(18,8)            |           | not null | 
+ volume          | numeric(24,8)            |           |          | 
+ source          | text                     |           | not null | 
+ source_event_id | text                     |           | not null | 
+ ingested_at     | timestamp with time zone |           | not null | now()
+Indexes:
+    "pk_price_ticks" PRIMARY KEY, btree (tick_id)
+    "ix_price_ticks_instrument_time" btree (instrument_id, observed_at DESC, tick_id DESC)
+    "uq_price_ticks_source_event" UNIQUE CONSTRAINT, btree (source, instrument_id, source_event_id)
+Check constraints:
+    "ck_price_ticks_price_pos" CHECK (price > 0::numeric)
+    "ck_price_ticks_source" CHECK (source = ANY (ARRAY['REPLAY'::text, 'BINANCE'::text, 'MANUAL'::text]))
+    "ck_price_ticks_source_event_not_blank" CHECK (btrim(source_event_id) <> ''::text)
+    "ck_price_ticks_volume_nonneg" CHECK (volume IS NULL OR volume >= 0::numeric)
+Foreign-key constraints:
+    "fk_price_ticks_instrument" FOREIGN KEY (instrument_id) REFERENCES instruments(instrument_id) ON DELETE RESTRICT
+Referenced by:
+    TABLE "alert_events" CONSTRAINT "fk_alert_events_tick" FOREIGN KEY (tick_id) REFERENCES price_ticks(tick_id) ON DELETE RESTRICT
+Triggers:
+    trg_price_ticks_evaluate_alerts AFTER INSERT ON price_ticks FOR EACH ROW EXECUTE FUNCTION evaluate_price_alerts()
+
+===== Every index on price_ticks: who created it, definition, size =====
+SELECT i.indexrelid::regclass AS index_name,
+       CASE WHEN c.conname IS NOT NULL THEN 'created by constraint ' || c.conname
+            ELSE 'created explicitly (sql/06_indexes.sql)' END AS origin,
+       pg_get_indexdef(i.indexrelid) AS definition,
+       pg_size_pretty(pg_relation_size(i.indexrelid)) AS size_here
+FROM pg_index i
+LEFT JOIN pg_constraint c ON c.conindid = i.indexrelid
+WHERE i.indrelid = 'price_ticks'::regclass
+ORDER BY 1;
+           index_name           |                      origin                       |                                                          definition                                                           | size_here 
+--------------------------------+---------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------+-----------
+ pk_price_ticks                 | created by constraint pk_price_ticks              | CREATE UNIQUE INDEX pk_price_ticks ON public.price_ticks USING btree (tick_id)                                                | 16 kB
+ pk_price_ticks                 | created by constraint fk_alert_events_tick        | CREATE UNIQUE INDEX pk_price_ticks ON public.price_ticks USING btree (tick_id)                                                | 16 kB
+ uq_price_ticks_source_event    | created by constraint uq_price_ticks_source_event | CREATE UNIQUE INDEX uq_price_ticks_source_event ON public.price_ticks USING btree (source, instrument_id, source_event_id)    | 16 kB
+ ix_price_ticks_instrument_time | created explicitly (sql/06_indexes.sql)           | CREATE INDEX ix_price_ticks_instrument_time ON public.price_ticks USING btree (instrument_id, observed_at DESC, tick_id DESC) | 16 kB
+(4 rows)
+
+===== The alert trigger previous-tick lookup, as the planner chooses on 30 rows =====
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
+SELECT t.price
+FROM price_ticks t
+WHERE t.instrument_id = 1
+  AND (t.observed_at, t.tick_id) < (SELECT observed_at, tick_id FROM price_ticks WHERE tick_id = 30)
+ORDER BY t.observed_at DESC, t.tick_id DESC
+LIMIT 1;
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Limit (actual rows=1.00 loops=1)
+   Buffers: shared hit=7
+   InitPlan 1
+     ->  Index Scan using pk_price_ticks on price_ticks (actual rows=1.00 loops=1)
+           Index Cond: (tick_id = 30)
+           Index Searches: 1
+           Buffers: shared hit=5
+   ->  Index Scan using ix_price_ticks_instrument_time on price_ticks t (actual rows=1.00 loops=1)
+         Index Cond: ((instrument_id = 1) AND (ROW(observed_at, tick_id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Index Searches: 1
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=46
+(13 rows)
+
+===== Same query with sequential scans discouraged (DEMONSTRATION ONLY, not a performance claim) =====
+shows that ix_price_ticks_instrument_time can answer it in index order, with no Sort node
+BEGIN;
+SET LOCAL enable_seqscan = off;
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
+SELECT t.price
+FROM price_ticks t
+WHERE t.instrument_id = 1
+  AND (t.observed_at, t.tick_id) < (SELECT observed_at, tick_id FROM price_ticks WHERE tick_id = 30)
+ORDER BY t.observed_at DESC, t.tick_id DESC
+LIMIT 1;
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Limit (actual rows=1.00 loops=1)
+   Buffers: shared hit=4
+   InitPlan 1
+     ->  Index Scan using pk_price_ticks on price_ticks (actual rows=1.00 loops=1)
+           Index Cond: (tick_id = 30)
+           Index Searches: 1
+           Buffers: shared hit=2
+   ->  Index Scan using ix_price_ticks_instrument_time on price_ticks t (actual rows=1.00 loops=1)
+         Index Cond: ((instrument_id = 1) AND (ROW(observed_at, tick_id) < ROW((InitPlan 1).col1, (InitPlan 1).col2)))
+         Index Searches: 1
+         Buffers: shared hit=4
+(11 rows)
+
+ROLLBACK;

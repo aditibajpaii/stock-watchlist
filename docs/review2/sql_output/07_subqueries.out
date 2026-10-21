@@ -1,0 +1,156 @@
+=== S01 | scalar | What share of all ticks does each instrument have?
+SELECT i.symbol, count(*) AS ticks,
+       round(100.0 * count(*) / (SELECT count(*) FROM price_ticks), 1) AS share_pct
+FROM price_ticks t
+JOIN instruments i ON i.instrument_id = t.instrument_id
+GROUP BY i.symbol
+ORDER BY ticks DESC, i.symbol;
+  symbol  | ticks | share_pct 
+----------+-------+-----------
+ RELIANCE |    12 |      40.0
+ BTCUSDT  |     8 |      26.7
+ TCS      |     6 |      20.0
+ ETHUSDT  |     2 |       6.7
+ INFY     |     2 |       6.7
+(5 rows)
+
+=== S02 | single-row | Which tick is the latest one for NSE TCS?
+SELECT t.tick_id, t.price, t.observed_at
+FROM price_ticks t
+WHERE (t.instrument_id, t.observed_at) =
+      (SELECT p.instrument_id, max(p.observed_at)
+       FROM price_ticks p
+       WHERE p.instrument_id = (SELECT instrument_id FROM instruments
+                                WHERE exchange = 'NSE' AND symbol = 'TCS')
+       GROUP BY p.instrument_id);
+ tick_id |     price     |        observed_at        
+---------+---------------+---------------------------
+      20 | 3490.00000000 | 2026-10-13 10:05:46+05:30
+(1 row)
+
+=== S03 | multi-row IN | Which users own a watchlist containing a Binance instrument?
+SELECT u.username, u.email
+FROM users u
+WHERE u.user_id IN (SELECT w.user_id
+                    FROM watchlists w
+                    JOIN watchlist_items wi ON wi.watchlist_id = w.watchlist_id
+                    JOIN instruments i      ON i.instrument_id = wi.instrument_id
+                    WHERE i.exchange = 'BINANCE')
+ORDER BY u.username;
+ username |       email       
+----------+-------------------
+ arjun    | arjun@example.com
+ kavya    | kavya@example.com
+(2 rows)
+
+=== S04 | ALL, correlated | Which RELIANCE ticks were inside the alert band (above every BELOW threshold, below every ABOVE threshold)?
+SELECT t.tick_id, t.price
+FROM price_ticks t
+WHERE t.instrument_id = 1              -- NSE RELIANCE
+  AND t.price > ALL (SELECT r.threshold FROM alert_rules r
+                     WHERE r.instrument_id = t.instrument_id
+                       AND r.direction = 'BELOW' AND r.is_active)
+  AND t.price < ALL (SELECT r.threshold FROM alert_rules r
+                     WHERE r.instrument_id = t.instrument_id
+                       AND r.direction = 'ABOVE' AND r.is_active)
+ORDER BY t.observed_at, t.tick_id;
+ tick_id |     price     
+---------+---------------
+       1 | 2985.50000000
+       4 | 2994.00000000
+      17 | 2979.00000000
+      24 | 2990.00000000
+(4 rows)
+
+=== S05 | ANY, correlated | Which instruments traded at or above ANY of their active ABOVE thresholds?
+SELECT DISTINCT i.symbol
+FROM price_ticks t
+JOIN instruments i ON i.instrument_id = t.instrument_id
+WHERE t.price >= ANY (SELECT r.threshold FROM alert_rules r
+                      WHERE r.instrument_id = t.instrument_id
+                        AND r.direction = 'ABOVE' AND r.is_active)
+ORDER BY i.symbol;
+  symbol  
+----------
+ BTCUSDT
+ RELIANCE
+(2 rows)
+
+=== S06 | correlated | What is the latest price of each instrument?
+SELECT i.symbol, t.price AS latest_price, t.tick_id
+FROM price_ticks t
+JOIN instruments i ON i.instrument_id = t.instrument_id
+WHERE (t.observed_at, t.tick_id) = (SELECT p.observed_at, p.tick_id
+                                    FROM price_ticks p
+                                    WHERE p.instrument_id = t.instrument_id
+                                    ORDER BY p.observed_at DESC, p.tick_id DESC
+                                    LIMIT 1)
+ORDER BY i.symbol;
+  symbol  |  latest_price   | tick_id 
+----------+-----------------+---------
+ BTCUSDT  | 100400.00000000 |      22
+ ETHUSDT  |   2994.60000000 |      18
+ INFY     |   1612.00000000 |      26
+ RELIANCE |   2788.00000000 |      30
+ TCS      |   3490.00000000 |      20
+(5 rows)
+
+=== S07 | EXISTS, correlated | Which instruments have produced at least one alert?
+SELECT i.symbol, i.name
+FROM instruments i
+WHERE EXISTS (SELECT 1
+              FROM alert_events e
+              JOIN price_ticks t ON t.tick_id = e.tick_id
+              WHERE t.instrument_id = i.instrument_id)
+ORDER BY i.symbol;
+  symbol  |             name              
+----------+-------------------------------
+ BTCUSDT  | Bitcoin / Tether
+ ETHUSDT  | Ether / Tether
+ RELIANCE | Reliance Industries Ltd
+ TCS      | Tata Consultancy Services Ltd
+(4 rows)
+
+=== S08 | EXISTS, NOT EXISTS, correlated | Which watched instruments have never received a price tick?
+SELECT i.symbol, i.name
+FROM instruments i
+WHERE EXISTS     (SELECT 1 FROM watchlist_items wi WHERE wi.instrument_id = i.instrument_id)
+  AND NOT EXISTS (SELECT 1 FROM price_ticks t      WHERE t.instrument_id  = i.instrument_id)
+ORDER BY i.symbol;
+  symbol  |          name           
+----------+-------------------------
+ HDFCBANK | HDFC Bank Ltd
+ M&M      | Mahindra & Mahindra Ltd
+(2 rows)
+
+=== S09 | NOT IN, multi-row IN | Which instruments have no alert rule at all?
+SELECT symbol, name
+FROM instruments
+WHERE instrument_id NOT IN (SELECT instrument_id FROM alert_rules)
+ORDER BY symbol;
+  symbol  |          name           
+----------+-------------------------
+ HDFCBANK | HDFC Bank Ltd
+ M&M      | Mahindra & Mahindra Ltd
+(2 rows)
+
+=== S10 | NOT IN, NULL pitfall | PITFALL: count ticks that never fired an alert, using NOT IN over an outer join
+SELECT count(*) AS ticks_that_never_fired
+FROM price_ticks
+WHERE tick_id NOT IN (SELECT e.tick_id
+                      FROM alert_rules r
+                      LEFT JOIN alert_events e ON e.rule_id = r.rule_id);
+ ticks_that_never_fired 
+------------------------
+                      0
+(1 row)
+
+=== S11 | NOT EXISTS, correlated | FIX: count ticks that never fired an alert, using NOT EXISTS
+SELECT count(*) AS ticks_that_never_fired
+FROM price_ticks t
+WHERE NOT EXISTS (SELECT 1 FROM alert_events e WHERE e.tick_id = t.tick_id);
+ ticks_that_never_fired 
+------------------------
+                     22
+(1 row)
+

@@ -1,0 +1,206 @@
+### Regression suites run with the PROPOSED fix applied (2026-10-13 10:03 IST)
+
+### STEP 5a. sql/02_schema_tests.sql on stock_watchlist_review2_fixtest
+
+===== SCHEMA TEST RESULTS =====
+ #  | result |                              test_name                              |                  expected                   |                   actual                    
+----+--------+---------------------------------------------------------------------+---------------------------------------------+---------------------------------------------
+  1 | PASS   | A1 duplicate username rejected                                      | 23505 uq_users_username                     | 23505 uq_users_username
+  2 | PASS   | A2 duplicate email rejected                                         | 23505 uq_users_email                        | 23505 uq_users_email
+  3 | PASS   | A3 duplicate instrument (exchange, symbol) rejected                 | 23505 uq_instruments_exchange_symbol        | 23505 uq_instruments_exchange_symbol
+  4 | PASS   | A4 same symbol on a different exchange accepted                     | success                                     | success
+  5 | PASS   | A5 duplicate watchlist name for same user rejected                  | 23505 uq_watchlists_user_name               | 23505 uq_watchlists_user_name
+  6 | PASS   | A6 same watchlist name for a different user accepted                | success                                     | success
+  7 | PASS   | A7 duplicate watchlist item rejected                                | 23505 pk_watchlist_items                    | 23505 pk_watchlist_items
+  8 | PASS   | A8 duplicate tick identity (source, instrument, event id) rejected  | 23505 uq_price_ticks_source_event           | 23505 uq_price_ticks_source_event
+  9 | PASS   | A9 same source_event_id on a different instrument accepted          | success                                     | success
+ 10 | PASS   | A10 same instrument + same observed_at, different event id accepted | success                                     | success
+ 11 | PASS   | A11 duplicate alert rule definition rejected                        | 23505 uq_alert_rules_definition             | 23505 uq_alert_rules_definition
+ 12 | PASS   | A12 same rule firing twice on the same tick rejected                | 23505 uq_alert_events_rule_tick             | 23505 uq_alert_events_rule_tick
+ 13 | PASS   | B1 negative price rejected                                          | 23514 ck_price_ticks_price_pos              | 23514 ck_price_ticks_price_pos
+ 14 | PASS   | B2 zero price rejected                                              | 23514 ck_price_ticks_price_pos              | 23514 ck_price_ticks_price_pos
+ 15 | PASS   | B3 negative volume rejected                                         | 23514 ck_price_ticks_volume_nonneg          | 23514 ck_price_ticks_volume_nonneg
+ 16 | PASS   | B4 NULL (unknown) volume accepted                                   | success                                     | success
+ 17 | PASS   | B5 zero volume accepted                                             | success                                     | success
+ 18 | PASS   | B6 invalid tick source rejected                                     | 23514 ck_price_ticks_source                 | 23514 ck_price_ticks_source
+ 19 | PASS   | B7 blank source_event_id rejected                                   | 23514 ck_price_ticks_source_event_not_blank | 23514 ck_price_ticks_source_event_not_blank
+ 20 | PASS   | B8 invalid alert direction rejected                                 | 23514 ck_alert_rules_direction              | 23514 ck_alert_rules_direction
+ 21 | PASS   | B9 zero threshold rejected                                          | 23514 ck_alert_rules_threshold_pos          | 23514 ck_alert_rules_threshold_pos
+ 22 | PASS   | B10 negative threshold rejected                                     | 23514 ck_alert_rules_threshold_pos          | 23514 ck_alert_rules_threshold_pos
+ 23 | PASS   | B11 negative cooldown rejected                                      | 23514 ck_alert_rules_cooldown_nonneg        | 23514 ck_alert_rules_cooldown_nonneg
+ 24 | PASS   | B12 zero cooldown accepted                                          | success                                     | success
+ 25 | PASS   | B13 invalid username format rejected                                | 23514 ck_users_username_format              | 23514 ck_users_username_format
+ 26 | PASS   | B14 invalid email rejected                                          | 23514 ck_users_email_format                 | 23514 ck_users_email_format
+ 27 | PASS   | B15 invalid exchange rejected                                       | 23514 ck_instruments_exchange               | 23514 ck_instruments_exchange
+ 28 | PASS   | B16 blank watchlist name rejected                                   | 23514 ck_watchlists_name                    | 23514 ck_watchlists_name
+ 29 | PASS   | C1 watchlist for non-existent user rejected                         | 23503 fk_watchlists_user                    | 23503 fk_watchlists_user
+ 30 | PASS   | C2 watchlist item for non-existent watchlist rejected               | 23503 fk_watchlist_items_watchlist          | 23503 fk_watchlist_items_watchlist
+ 31 | PASS   | C3 watchlist item for non-existent instrument rejected              | 23503 fk_watchlist_items_instrument         | 23503 fk_watchlist_items_instrument
+ 32 | PASS   | C4 tick for non-existent instrument rejected                        | 23503 fk_price_ticks_instrument             | 23503 fk_price_ticks_instrument
+ 33 | PASS   | C5 alert rule for non-existent user rejected                        | 23503 fk_alert_rules_user                   | 23503 fk_alert_rules_user
+ 34 | PASS   | C6 alert rule for non-existent instrument rejected                  | 23503 fk_alert_rules_instrument             | 23503 fk_alert_rules_instrument
+ 35 | PASS   | C7 alert event for non-existent rule rejected                       | 23503 fk_alert_events_rule                  | 23503 fk_alert_events_rule
+ 36 | PASS   | C8 alert event for non-existent tick rejected                       | 23503 fk_alert_events_tick                  | 23503 fk_alert_events_tick
+ 37 | PASS   | D1 delete instrument used in a watchlist blocked                    | 23001 fk_watchlist_items_instrument         | 23001 fk_watchlist_items_instrument
+ 38 | PASS   | D2 delete instrument used by an alert rule blocked                  | 23001 fk_alert_rules_instrument             | 23001 fk_alert_rules_instrument
+ 39 | PASS   | D3 delete instrument with price history blocked                     | 23001 fk_price_ticks_instrument             | 23001 fk_price_ticks_instrument
+ 40 | PASS   | D4 delete price tick referenced by an alert event blocked           | 23001 fk_alert_events_tick                  | 23001 fk_alert_events_tick
+ 41 | PASS   | D5 delete unreferenced instrument allowed                           | success                                     | success
+ 42 | PASS   | E0 delete watchlist priya/Tech succeeds                             | success                                     | success
+ 43 | PASS   | E1 deleting a watchlist cascades to its items                       | true                                        | true
+ 44 | PASS   | E2 deleting a watchlist keeps all price ticks                       | true                                        | true
+ 45 | PASS   | E2b delete user arjun succeeds                                      | success                                     | success
+ 46 | PASS   | E3 user delete cascades to watchlists                               | true                                        | true
+ 47 | PASS   | E4 user delete cascades to watchlist items (via watchlists)         | true                                        | true
+ 48 | PASS   | E5 user delete cascades to alert rules                              | true                                        | true
+ 49 | PASS   | E6 user delete cascades to alert events (via rules)                 | true                                        | true
+ 50 | PASS   | E7 user delete keeps ALL price ticks                                | true                                        | true
+ 51 | PASS   | E8 user delete leaves other users' rules and watchlists             | true                                        | true
+
+ passed | failed | total 
+--------+--------+-------
+     51 |      0 |    51
+
+All changes rolled back; seed data unchanged.
+
+### STEP 5b. sql/04_alert_tests.sql on stock_watchlist_review2_fixtest
+
+===== PHASE 4 ALERT TEST RESULTS =====
+ #  | result |                                      test_name                                       |                expected                 |                 actual                  
+----+--------+--------------------------------------------------------------------------------------+-----------------------------------------+-----------------------------------------
+  1 | PASS   | 01a first tick: ingest_tick returns INSERTED with a tick_id                          | INSERTED true                           | INSERTED true
+  2 | PASS   | 01b first tick stored exactly once                                                   | 1                                       | 1
+  3 | PASS   | 01c first tick creates no alert (no previous price)                                  | 0                                       | 0
+  4 | PASS   | 02a 2990 -> 2999 (still below): no alert                                             | 0                                       | 0
+  5 | PASS   | 02b 2999 -> 3001 crosses ABOVE: exactly one event                                    | 1                                       | 1
+  6 | PASS   | 02c the event references the 3001 tick                                               | 3001.00000000                           | 3001.00000000
+  7 | PASS   | 03 staying ABOVE 3001 -> 3010 -> 3020: still exactly one event                       | 1                                       | 1
+  8 | PASS   | 04a drop below 3000 (2950): no event for a downward move                             | 1                                       | 1
+  9 | PASS   | 04b re-cross ABOVE at t=100 s (last fire t=2 s, cooldown 60 s): fires again          | 2                                       | 2
+ 10 | PASS   | 05 2850 -> 2790 crosses BELOW: exactly one event                                     | 1                                       | 1
+ 11 | PASS   | 06 staying BELOW 2790 -> 2780 -> 2700: still exactly one event                       | 1                                       | 1
+ 12 | PASS   | 07a ABOVE equality 2990 -> 3000 (= threshold): fires                                 | 1                                       | 1
+ 13 | PASS   | 07b from exactly 3000 up to 3010: no second event (already above side)               | 1                                       | 1
+ 14 | PASS   | 08a BELOW equality 2810 -> 2800 (= threshold): fires                                 | 1                                       | 1
+ 15 | PASS   | 08b from exactly 2800 down to 2790: no second event                                  | 1                                       | 1
+ 16 | PASS   | 09a crossing at t=100 s within cooldown of t=10 s fire: suppressed                   | 1                                       | 1
+ 17 | PASS   | 09b suppressed crossing is dropped, not retried while price stays above              | 1                                       | 1
+ 18 | PASS   | 10a crossing at t=400 s, after cooldown (10+300): fires                              | 2                                       | 2
+ 19 | PASS   | 10b crossing exactly at last fire + cooldown (t=700 s): fires                        | 3                                       | 3
+ 20 | PASS   | 10c fired ticks are t=10, 400, 700 s (cooldown uses observed_at)                     | 10,400,700                              | 10,400,700
+ 21 | PASS   | 10d all 3 events share one fired_at (so fired_at could not drive cooldown)           | 1                                       | 1
+ 22 | PASS   | 11a same (source, instrument, event id) again: returns DUPLICATE, tick_id NULL       | DUPLICATE NULL                          | DUPLICATE NULL
+ 23 | PASS   | 11b same event id with a different price/time: still DUPLICATE                       | DUPLICATE                               | DUPLICATE
+ 24 | PASS   | 11c no second tick stored (2 ticks total)                                            | 2                                       | 2
+ 25 | PASS   | 11d no second alert (1 event total)                                                  | 1                                       | 1
+ 26 | PASS   | 12a second event at the SAME observed_at: INSERTED                                   | INSERTED                                | INSERTED
+ 27 | PASS   | 12b both ticks exist with one shared observed_at                                     | 2 ticks, 1 timestamp                    | 2 ticks, 1 timestamp
+ 28 | PASS   | 12c tie broken by tick_id: s1 (2990) is previous of s2 (3010) -> one event on s2     | test:TSTSAME:s2                         | test:TSTSAME:s2
+ 29 | PASS   | 12d third tick at same time, still above: no extra event                             | 1                                       | 1
+ 30 | PASS   | 13a late tick (t=50 s after t=100 s exists) at 3050: INSERTED (stored)               | INSERTED                                | INSERTED
+ 31 | PASS   | 13b late tick is kept: 3 ticks stored                                                | 3                                       | 3
+ 32 | PASS   | 13c late tick above threshold produced NO event                                      | 0                                       | 0
+ 33 | PASS   | 13d next tick 3010 compares with 2995 (t=100 s), not the late 3050: fires            | 1                                       | 1
+ 34 | PASS   | 14a manual INSERT pairing TSTUP rule with TSTDN tick rejected                        | 23514 trg_alert_events_check_instrument | 23514 trg_alert_events_check_instrument
+ 35 | PASS   | 14b UPDATE moving an event onto another instrument's tick rejected                   | 23514 trg_alert_events_check_instrument | 23514 trg_alert_events_check_instrument
+ 36 | PASS   | 14c after the rejections, rule up still has its 2 events, both on TSTUP ticks        | 2/2                                     | 2/2
+ 37 | PASS   | 15 crossing with an inactive rule: 2 ticks stored, 0 events                          | 2 ticks, 0 events                       | 2 ticks, 0 events
+ 38 | PASS   | 16a ingest_tick on inactive instrument rejected (SW002)                              | SW002 -                                 | SW002 -
+ 39 | PASS   | 16b no tick stored for the inactive instrument                                       | 0                                       | 0
+ 40 | PASS   | 17a ingest_tick on unknown symbol rejected (SW001)                                   | SW001 -                                 | SW001 -
+ 41 | PASS   | 17b known symbol on the wrong exchange rejected (SW001)                              | SW001 -                                 | SW001 -
+ 42 | PASS   | 18a top-level: inside the transaction the crossing created 1 event                   | 1                                       | 1
+ 43 | PASS   | 18b top-level: after ROLLBACK, no tick and no event remain                           | 0 ticks, 0 events                       | 0 ticks, 0 events
+ 44 | PASS   | 18c top-level: after ROLLBACK, the fixture instrument is gone too                    | 0                                       | 0
+ 45 | PASS   | 18d savepoint rollback: tick and alert vanish together                               | inside 1 event; after 0 ticks, 0 events | inside 1 event; after 0 ticks, 0 events
+ 46 | PASS   | 19 same (rule_id, tick_id) inserted again by hand: UNIQUE rejects it                 | 23505 uq_alert_events_rule_tick         | 23505 uq_alert_events_rule_tick
+ 47 | PASS   | 20a tick 2990 -> 3100 fires exactly m1 (>=3000), m2 (>=3050), m3 (other user >=3000) | m1,m2,m3                                | m1,m2,m3
+ 48 | PASS   | 20b BELOW 2900 (m4) and ABOVE 3200 (m5) did not fire                                 | 0                                       | 0
+ 49 | PASS   | 21 every event pairs a rule and tick of the same instrument                          | 0                                       | 0
+ 50 | PASS   | 22 total events created by this test run (no extras anywhere)                        | 14                                      | 14
+
+ passed | failed | total 
+--------+--------+-------
+     50 |      0 |    50
+
+All changes rolled back; seed data unchanged.
+
+### STEP 6. sql/verify_spec.sql with the fix applied (expected to fail: it lists the design's objects)
+===== 1. Column mismatches (expect 0 rows) =====
+ tbl | col | problem | expected_type | live_type | expected_null | live_null | expected_default | live_default 
+-----+-----+---------+---------------+-----------+---------------+-----------+------------------+--------------
+
+===== 2. Constraint mismatches (expect 0 rows) =====
+ constraint_name | problem | expected_table | live_table | expected_def | live_def 
+-----------------+---------+----------------+------------+--------------+----------
+
+===== 3. Function / trigger / index mismatches (expect 0 rows) =====
+   kind   |                 name                 |     problem      | expected_def |                                                                             live_def                                                                              
+----------+--------------------------------------+------------------+--------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ trigger  | trg_price_ticks_instrument_immutable | EXTRA in live DB |              | CREATE TRIGGER trg_price_ticks_instrument_immutable BEFORE UPDATE OF instrument_id ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION forbid_instrument_change()
+ trigger  | trg_alert_rules_instrument_immutable | EXTRA in live DB |              | CREATE TRIGGER trg_alert_rules_instrument_immutable BEFORE UPDATE OF instrument_id ON public.alert_rules FOR EACH ROW EXECUTE FUNCTION forbid_instrument_change()
+ function | forbid_instrument_change             | EXTRA in live DB |              | forbid_instrument_change() RETURNS trigger
+
+===== 3b. Functions, triggers and non-constraint indexes present =====
+   kind   |                 name                 |                                                                                                   def                                                                                                    
+----------+--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ function | check_alert_event_instrument         | check_alert_event_instrument() RETURNS trigger
+ function | evaluate_price_alerts                | evaluate_price_alerts() RETURNS trigger
+ function | forbid_instrument_change             | forbid_instrument_change() RETURNS trigger
+ function | ingest_tick                          | ingest_tick(p_exchange text, p_symbol text, p_observed_at timestamp with time zone, p_price numeric, p_volume numeric, p_source text, p_source_event_id text) RETURNS TABLE(status text, tick_id bigint)
+ index    | ix_price_ticks_instrument_time       | CREATE INDEX ix_price_ticks_instrument_time ON public.price_ticks USING btree (instrument_id, observed_at DESC, tick_id DESC)
+ trigger  | trg_alert_events_check_instrument    | CREATE TRIGGER trg_alert_events_check_instrument BEFORE INSERT OR UPDATE OF rule_id, tick_id ON public.alert_events FOR EACH ROW EXECUTE FUNCTION check_alert_event_instrument()
+ trigger  | trg_alert_rules_instrument_immutable | CREATE TRIGGER trg_alert_rules_instrument_immutable BEFORE UPDATE OF instrument_id ON public.alert_rules FOR EACH ROW EXECUTE FUNCTION forbid_instrument_change()
+ trigger  | trg_price_ticks_evaluate_alerts      | CREATE TRIGGER trg_price_ticks_evaluate_alerts AFTER INSERT ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION evaluate_price_alerts()
+ trigger  | trg_price_ticks_instrument_immutable | CREATE TRIGGER trg_price_ticks_instrument_immutable BEFORE UPDATE OF instrument_id ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION forbid_instrument_change()
+
+===== 4. Relationships derived from foreign keys =====
+   parent    |      child      |              fk               |  fk_columns   | cardinality |       child_participation        | on_delete 
+-------------+-----------------+-------------------------------+---------------+-------------+----------------------------------+-----------
+ alert_rules | alert_events    | fk_alert_events_rule          | rule_id       | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+ instruments | alert_rules     | fk_alert_rules_instrument     | instrument_id | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ instruments | price_ticks     | fk_price_ticks_instrument     | instrument_id | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ instruments | watchlist_items | fk_watchlist_items_instrument | instrument_id | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ price_ticks | alert_events    | fk_alert_events_tick          | tick_id       | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ users       | alert_rules     | fk_alert_rules_user           | user_id       | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+ users       | watchlists      | fk_watchlists_user            | user_id       | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+ watchlists  | watchlist_items | fk_watchlist_items_watchlist  | watchlist_id  | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+
+psql:sql/verify_spec.sql:246: NOTICE:  columns checked: 37, constraints checked: 36, functions/triggers/indexes checked: 6
+psql:sql/verify_spec.sql:246: ERROR:  SPEC MISMATCH: 0 column, 0 constraint, 3 function/trigger/index differences
+CONTEXT:  PL/pgSQL function inline_code_block line 22 at RAISE
+### verify_spec exit status: 3
+
+### STEP 7. python scripts/review2_fixtest_suites.py
+   [fix added to stock_watchlist_replay_template: 2 immutability triggers]
+..................
+----------------------------------------------------------------------
+Ran 18 tests in 3.711s
+
+OK
+SUITE tests.test_replay: 18 tests, 0 failures, 0 errors; template(s) with the fix: stock_watchlist_replay_template -> PASS
+/Users/aditi/dbms project/.venv/lib/python3.13/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+   [fix added to stock_watchlist_api_template: 2 immutability triggers]
+.......database unavailable: connection failed: connection to server on socket "/tmp/.s.PGSQL.5432" failed: FATAL:  database "database_that_does_not_exist" does not exist
+.........................
+----------------------------------------------------------------------
+Ran 32 tests in 5.041s
+
+OK
+SUITE tests.test_api: 32 tests, 0 failures, 0 errors; template(s) with the fix: stock_watchlist_api_template -> PASS
+   [fix added to stock_watchlist_frontend_test: 2 immutability triggers]
+..............
+----------------------------------------------------------------------
+Ran 14 tests in 0.237s
+
+OK
+SUITE tests.test_frontend: 14 tests, 0 failures, 0 errors; template(s) with the fix: stock_watchlist_frontend_test -> PASS
+   [fix added to stock_watchlist_livefeed_template: 2 immutability triggers]
+........................
+----------------------------------------------------------------------
+Ran 24 tests in 2.891s
+
+OK
+SUITE tests.test_live_feed: 24 tests, 0 failures, 0 errors; template(s) with the fix: stock_watchlist_livefeed_template -> PASS
+ALL SUITES PASSED WITH THE FIX

@@ -1,0 +1,56 @@
+===== Connection =====
+SELECT current_database() AS database, current_user AS connected_as,
+       split_part(version(), ' on ', 1) AS server;
+            database             | connected_as |           server           
+---------------------------------+--------------+----------------------------
+ stock_watchlist_review2_sandbox | aditi        | PostgreSQL 18.6 (Homebrew)
+(1 row)
+
+DROP SCHEMA IF EXISTS review2 CASCADE;
+psql:sql/review2/01_setup.sql:22: NOTICE:  schema "review2" does not exist, skipping
+CREATE SCHEMA review2;
+COMMENT ON SCHEMA review2 IS
+    'Review 2 academic demonstrations (views, procedures, functions, cursors). Not used by the application.';
+===== Row counts: seed + one replay run (expected 3|7|5|11|30|6|8) =====
+SELECT (SELECT count(*) FROM users)           AS users,
+       (SELECT count(*) FROM instruments)     AS instruments,
+       (SELECT count(*) FROM watchlists)      AS watchlists,
+       (SELECT count(*) FROM watchlist_items) AS watchlist_items,
+       (SELECT count(*) FROM price_ticks)     AS price_ticks,
+       (SELECT count(*) FROM alert_rules)     AS alert_rules,
+       (SELECT count(*) FROM alert_events)    AS alert_events;
+ users | instruments | watchlists | watchlist_items | price_ticks | alert_rules | alert_events 
+-------+-------------+------------+-----------------+-------------+-------------+--------------
+     3 |           7 |          5 |              11 |          30 |           6 |            8
+(1 row)
+
+===== Ticks per source and instrument (replay run r2demo) =====
+SELECT t.source, i.exchange, i.symbol, count(*) AS ticks,
+       min(t.source_event_id) AS first_event_id, max(t.source_event_id) AS last_event_id
+FROM price_ticks t
+JOIN instruments i ON i.instrument_id = t.instrument_id
+GROUP BY t.source, i.exchange, i.symbol
+ORDER BY i.exchange, i.symbol;
+ source | exchange |  symbol  | ticks | first_event_id | last_event_id 
+--------+----------+----------+-------+----------------+---------------
+ REPLAY | BINANCE  | BTCUSDT  |     8 | r2demo:000003  | r2demo:000022
+ REPLAY | BINANCE  | ETHUSDT  |     2 | r2demo:000013  | r2demo:000018
+ REPLAY | NSE      | INFY     |     2 | r2demo:000025  | r2demo:000026
+ REPLAY | NSE      | RELIANCE |    12 | r2demo:000001  | r2demo:000030
+ REPLAY | NSE      | TCS      |     6 | r2demo:000002  | r2demo:000020
+(5 rows)
+
+===== Alert events produced by the replay (expected 8: rules 1x2, 2x1, 3x2, 4x2, 6x1) =====
+SELECT e.rule_id, count(*) AS events
+FROM alert_events e
+GROUP BY e.rule_id
+ORDER BY e.rule_id;
+ rule_id | events 
+---------+--------
+       1 |      2
+       2 |      1
+       3 |      2
+       4 |      2
+       6 |      1
+(5 rows)
+

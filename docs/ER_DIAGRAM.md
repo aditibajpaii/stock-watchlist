@@ -1,4 +1,11 @@
-# ER Diagram — stock_watchlist (live schema)
+# Relational schema diagram (Crow's Foot) — stock_watchlist
+
+The conceptual ER diagram in Chen notation is docs/review2/ER_CORRECTED.png.
+This page shows the tables (types, PK/FK/alternate keys), not the conceptual
+model. `docs/ER_DIAGRAM.mmd` and `docs/er_diagram.png` are an earlier export
+(2026-09-25) of this same table diagram, still with the old UK markers on
+composite-key columns; do not present them as the ER diagram.
+Corrected on 2026-10-13 (Review 2); each change and the replaced text are listed in docs/review2/OLDER_DOCS_CORRECTIONS.md.
 
 Verified against the PostgreSQL 18.6 catalog on 2026-09-25 with
 `sql/verify_spec.sql` (0 column, 0 constraint and 0 object mismatches).
@@ -26,16 +33,16 @@ erDiagram
     }
     INSTRUMENTS {
         bigint instrument_id PK
-        text exchange UK "UK with symbol"
-        text symbol UK "UK with exchange"
+        text exchange "AK1 (exchange, symbol)"
+        text symbol "AK1 (exchange, symbol)"
         text name
         text quote_currency
         boolean is_active
     }
     WATCHLISTS {
         bigint watchlist_id PK
-        bigint user_id FK "UK with name"
-        text name "UK with user_id"
+        bigint user_id FK "AK1 (user_id, name)"
+        text name "AK1 (user_id, name)"
         timestamptz created_at
     }
     WATCHLIST_ITEMS {
@@ -45,28 +52,28 @@ erDiagram
     }
     PRICE_TICKS {
         bigint tick_id PK
-        bigint instrument_id FK "UK with source, source_event_id"
+        bigint instrument_id FK "AK1 (source, instrument_id, source_event_id)"
         timestamptz observed_at
         numeric price "numeric(18,8)"
         numeric volume "numeric(24,8), NULL allowed"
-        text source "UK with instrument_id, source_event_id"
-        text source_event_id "UK with source, instrument_id"
+        text source "AK1 (source, instrument_id, source_event_id)"
+        text source_event_id "AK1 (source, instrument_id, source_event_id)"
         timestamptz ingested_at
     }
     ALERT_RULES {
         bigint rule_id PK
-        bigint user_id FK "UK with instrument_id, direction, threshold"
-        bigint instrument_id FK
-        text direction "ABOVE or BELOW"
-        numeric threshold "numeric(18,8)"
+        bigint user_id FK "AK1 (user_id, instrument_id, direction, threshold)"
+        bigint instrument_id FK "AK1"
+        text direction "ABOVE or BELOW; AK1"
+        numeric threshold "numeric(18,8); AK1"
         integer cooldown_seconds
         boolean is_active
         timestamptz created_at
     }
     ALERT_EVENTS {
         bigint event_id PK
-        bigint rule_id FK "UK with tick_id"
-        bigint tick_id FK "UK with rule_id"
+        bigint rule_id FK "AK1 (rule_id, tick_id)"
+        bigint tick_id FK "AK1 (rule_id, tick_id)"
         timestamptz fired_at
     }
 ```
@@ -83,7 +90,8 @@ How to export an image of it:
 | `o{` on the child side | zero or more children |
 | PK | primary key |
 | FK | foreign key |
-| UK | column is part of a UNIQUE constraint (alternate / candidate key) |
+| UK | the column alone is UNIQUE (a single-column alternate key) |
+| AK1 (in the comment) | the column belongs to a composite alternate key: the listed columns are UNIQUE together, not each on its own |
 
 ## Relationship verification (from the catalog)
 
@@ -121,8 +129,10 @@ These are not direct FKs. They exist through a junction table.
 - users → instruments directly. That link exists only through watchlists
   and watchlist_items, or through alert_rules.
 - alert_events → instruments. That link is reached through tick_id, or
-  through rule_id. The Phase 4 integrity trigger will require both paths
-  to reach the same instrument; it is a rule, not a relationship.
+  through rule_id. Trigger trg_alert_events_check_instrument requires both
+  paths to reach the same instrument when alert_events rows are written; it
+  is a rule, not a relationship. Later instrument_id changes on alert_rules
+  or price_ticks are not checked (docs/review2/sql_output/22_integrity_scope.out).
 
 ## Re-verify
 

@@ -1,0 +1,72 @@
+<!--
+  Reading guide | ER to relational schema (team companion page to ER_CHEN_PRESENTATION).
+  Source recreated on 2026-10-13 from the team's image ER_Explanation_Notes.png
+  (2700x1780, SHA-256 7af7c00bf212b89e49025c98d641d35296e13852f460aae491ef57847e80374d),
+  same layout, colours and text, with two wording corrections:
+    - box "Cardinality and participation": CONTAINS is partial on both sides because an
+      instrument need not be on any watchlist (the original gave only the watchlist reason);
+    - box "Integrity rule": the open check "verify parent UPDATE protection" is answered.
+      The trigger trg_alert_events_check_instrument does NOT prevent later instrument_id
+      changes on alert_rules or price_ticks (sql/review2/22_integrity_scope.sql).
+  Font sizes are fractional because they reproduce the original image's text positions.
+  Render: python scripts/review2_diagrams.py --render docs/review2/ER_READING_GUIDE.svg 2700 1780 --font-dir <dir with DejaVuSans.ttf>
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="2700" height="1780" viewBox="0 0 2700 1780">
+<rect x="0" y="0" width="2700" height="1780" fill="#ffffff"/>
+<text x="1348" y="76" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="48.3" font-weight="bold" fill="#205c92">READING GUIDE | ER TO RELATIONAL SCHEMA</text>
+<text x="1350" y="127" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="27.5" fill="#617080">Companion to the conceptual Chen diagram — keep this off the main presentation slide.</text>
+<g id="box-A">
+<rect x="55" y="175" width="1250" height="300" rx="19" ry="19" fill="#f6f9fc" stroke="#cfdae5" stroke-width="2"/>
+<text x="83" y="228" font-family="DejaVu Sans, Arial, sans-serif" font-size="29.2" font-weight="bold" fill="#205c92">Why six entities but seven database tables?</text>
+<text x="83" y="276" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">WATCHLIST — CONTAINS — INSTRUMENT is a many-to-many relationship.</text>
+<text x="83" y="318" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">The relationship attribute added_at records when membership was created.</text>
+<text x="83" y="360" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">Relational mapping produces watchlist_items(watchlist_id, instrument_id, added_at).</text>
+<text x="83" y="402" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">Composite PK: (watchlist_id, instrument_id); both columns reference parent tables.</text>
+</g>
+<g id="box-B">
+<rect x="1385" y="175" width="1255" height="300" rx="19" ry="19" fill="#f6f9fc" stroke="#cfdae5" stroke-width="2"/>
+<text x="1413" y="228" font-family="DejaVu Sans, Arial, sans-serif" font-size="29.2" font-weight="bold" fill="#205c92">Cardinality and participation are different</text>
+<text x="1413" y="276" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">1:N means one parent can relate to many children; it does NOT mean at least one.</text>
+<text x="1413" y="318" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">Every WATCHLIST belongs to a USER: total participation at WATCHLIST.</text>
+<text x="1413" y="360" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">A USER may have zero watchlists: partial participation at USER.</text>
+<text x="1413" y="402" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">An empty watchlist is permitted, and an instrument need not be on any watchlist:</text>
+<text x="1413" y="444" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">CONTAINS remains partial on BOTH sides.</text>
+</g>
+<g id="box-C">
+<rect x="55" y="520" width="2590" height="480" rx="19" ry="19" fill="#f6f9fc" stroke="#cfdae5" stroke-width="2"/>
+<text x="83" y="573" font-family="DejaVu Sans, Arial, sans-serif" font-size="29.2" font-weight="bold" fill="#205c92">Candidate keys and alternate uniqueness (from the implemented schema)</text>
+<text x="83" y="621" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">USER PK user_id; alternate keys username and email (each individually UNIQUE).</text>
+<text x="83" y="663" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">INSTRUMENT PK instrument_id; alternate key (exchange, symbol) as one composite UNIQUE.</text>
+<text x="83" y="705" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">WATCHLIST PK watchlist_id; alternate key (user_id, name).</text>
+<text x="83" y="747" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">PRICE_TICK PK tick_id; alternate key (source, instrument_id, source_event_id).</text>
+<text x="83" y="789" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">ALERT_RULE PK rule_id; alternate key (user_id, instrument_id, direction, threshold).</text>
+<text x="83" y="831" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">ALERT_EVENT PK event_id; alternate key (rule_id, tick_id).</text>
+<text x="83" y="873" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">In conceptual Chen notation, a key containing a relationship is clarified here, not drawn as a copied FK.</text>
+</g>
+<g id="box-D">
+<rect x="55" y="1045" width="1250" height="375" rx="19" ry="19" fill="#f6f9fc" stroke="#cfdae5" stroke-width="2"/>
+<text x="83" y="1098" font-family="DejaVu Sans, Arial, sans-serif" font-size="29.2" font-weight="bold" fill="#205c92">Integrity rule: scope of database enforcement</text>
+<text x="83" y="1146" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">For each ALERT_EVENT, its ALERT_RULE and PRICE_TICK must refer to the same INSTRUMENT.</text>
+<text x="83" y="1188" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">The described event trigger checks this on INSERT or UPDATE of rule_id / tick_id.</text>
+<text x="83" y="1230" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">The current trigger does NOT prevent later instrument_id changes on parent records.</text>
+<text x="83" y="1272" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">Verified: PostgreSQL accepts such UPDATEs on alert_rules and price_ticks.</text>
+<text x="83" y="1314" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">The rule holds in practice only because no application path changes instrument_id.</text>
+<text x="83" y="1356" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">Do not add an extra relationship diamond just to represent this cross-table rule.</text>
+</g>
+<g id="box-E">
+<rect x="1385" y="1045" width="1255" height="375" rx="19" ry="19" fill="#f6f9fc" stroke="#cfdae5" stroke-width="2"/>
+<text x="1413" y="1098" font-family="DejaVu Sans, Arial, sans-serif" font-size="29.2" font-weight="bold" fill="#205c92">Presenting the diagram to faculty</text>
+<text x="1413" y="1146" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">Conceptual ER: entities, attributes, relationships, cardinality and participation.</text>
+<text x="1413" y="1188" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">Relational schema: seven physical tables, keys, FKs, data types and ON DELETE.</text>
+<text x="1413" y="1230" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">Composite “listing” groups exchange and symbol; it is NOT a stored SQL column.</text>
+<text x="1413" y="1272" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">ALERT_EVENT is an entity because it records an occurrence with event_id/fired_at.</text>
+<text x="1413" y="1314" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">The M:N CONTAINS relationship becomes the watchlist_items junction table.</text>
+</g>
+<g id="box-F">
+<rect x="55" y="1470" width="2590" height="228" rx="19" ry="19" fill="#f6f9fc" stroke="#cfdae5" stroke-width="2"/>
+<text x="83" y="1523" font-family="DejaVu Sans, Arial, sans-serif" font-size="29.2" font-weight="bold" fill="#205c92">Quick notation reminder</text>
+<text x="83" y="1571" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">Rectangle = entity • Oval = attribute • Diamond = relationship • Underline = key</text>
+<text x="83" y="1613" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">1 / N / M = cardinality at each relationship end • Double connector = total participation</text>
+<text x="83" y="1655" font-family="DejaVu Sans, Arial, sans-serif" font-size="23.05" fill="#202b35">No arrowheads, no SQL types, no FK columns copied merely to redraw relationship lines.</text>
+</g>
+</svg>

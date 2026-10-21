@@ -78,7 +78,7 @@ project.
 | Suite | Checks |
 |---|---|
 | sql/02_schema_tests.sql | 51 constraint tests |
-| sql/verify_spec.sql | live schema = spec |
+| sql/verify_spec.sql | live schema matches docs/SCHEMA_DESIGN.md |
 | sql/04_alert_tests.sql | 50 alert-engine tests |
 | tests/concurrency_test.sh | 17 multi-session locking/NOTIFY checks |
 | tests.test_replay | 18 |
@@ -95,11 +95,8 @@ docs/benchmark_results/.
 
 | File | Contents |
 |---|---|
-| docs/DEMO_GUIDE.md | step-by-step classroom demo and what to do if something fails |
-| docs/FACT_SHEET.md | every verified fact and number (for the report team) |
-| docs/EVIDENCE_CHECKLIST.md | screenshots to capture, starting with the must-have list |
-| docs/VIVA_NOTES.md | short viva answers, top-15 list first |
-| docs/PHASE1_SPEC.md, docs/ER_DIAGRAM.md, docs/NORMALIZATION_NOTES.md | schema design, ER diagram, FDs/BCNF |
+| docs/SCHEMA_DESIGN.md, docs/ER_DIAGRAM.md, docs/NORMALIZATION_NOTES.md | schema design, relational schema diagram, FDs/BCNF (where they differ, docs/review2 is correct) |
+| docs/review2/README.md | Review 2: Chen ER diagram, normalization proof, SQL evidence, viva notes |
 | docs/INDEX_BENCHMARK.md | index benchmark method and results |
 | docs/API.md, docs/FRONTEND.md, docs/LIVE_FEED.md | backend, web UI, live feed |
 | data/README.md | row-by-row expected behaviour of the replay CSV |

@@ -1,0 +1,154 @@
+===== The composite / alternate keys, read from pg_constraint =====
+SELECT conrelid::regclass AS table_name, conname AS constraint_name,
+       pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conname IN ('uq_instruments_exchange_symbol', 'uq_watchlists_user_name',
+                  'uq_price_ticks_source_event', 'uq_alert_events_rule_tick',
+                  'pk_watchlist_items')
+ORDER BY conrelid::regclass::text;
+   table_name    |        constraint_name         |                   definition                    
+-----------------+--------------------------------+-------------------------------------------------
+ alert_events    | uq_alert_events_rule_tick      | UNIQUE (rule_id, tick_id)
+ instruments     | uq_instruments_exchange_symbol | UNIQUE (exchange, symbol)
+ price_ticks     | uq_price_ticks_source_event    | UNIQUE (source, instrument_id, source_event_id)
+ watchlist_items | pk_watchlist_items             | PRIMARY KEY (watchlist_id, instrument_id)
+ watchlists      | uq_watchlists_user_name        | UNIQUE (user_id, name)
+(5 rows)
+
+BEGIN;
+===== UNIQUE (exchange, symbol) on instruments =====
+>>> EXPECTED ERROR [23505] same exchange + same symbol
+INSERT INTO instruments (exchange, symbol, name, quote_currency)
+VALUES ('NSE', 'RELIANCE', 'Duplicate listing', 'INR');
+psql:sql/review2/03_constraints.sql:33: ERROR:  duplicate key value violates unique constraint "uq_instruments_exchange_symbol"
+DETAIL:  Key (exchange, symbol)=(NSE, RELIANCE) already exists.
+<<< actual SQLSTATE: 23505
+allowed: the same symbol on a DIFFERENT exchange (the key is the pair, not symbol alone)
+INSERT INTO instruments (exchange, symbol, name, quote_currency)
+VALUES ('BSE', 'RELIANCE', 'Reliance Industries Ltd', 'INR')
+RETURNING instrument_id, exchange, symbol;
+ instrument_id | exchange |  symbol  
+---------------+----------+----------
+             9 | BSE      | RELIANCE
+(1 row)
+
+===== UNIQUE (user_id, name) on watchlists =====
+>>> EXPECTED ERROR [23505] arjun already has a watchlist called Crypto
+INSERT INTO watchlists (user_id, name)
+SELECT user_id, 'Crypto' FROM users WHERE username = 'arjun';
+psql:sql/review2/03_constraints.sql:43: ERROR:  duplicate key value violates unique constraint "uq_watchlists_user_name"
+DETAIL:  Key (user_id, name)=(1, Crypto) already exists.
+<<< actual SQLSTATE: 23505
+allowed: another user may use the same watchlist name
+INSERT INTO watchlists (user_id, name)
+SELECT user_id, 'Crypto' FROM users WHERE username = 'priya'
+RETURNING watchlist_id, user_id, name;
+ watchlist_id | user_id |  name  
+--------------+---------+--------
+            8 |       2 | Crypto
+(1 row)
+
+===== UNIQUE (source, instrument_id, source_event_id) on price_ticks =====
+>>> EXPECTED ERROR [23505] replaying the stored event r2demo:000006 for RELIANCE
+INSERT INTO price_ticks (instrument_id, observed_at, price, volume, source, source_event_id)
+SELECT instrument_id, observed_at, price, volume, source, source_event_id
+FROM price_ticks WHERE source_event_id = 'r2demo:000006';
+psql:sql/review2/03_constraints.sql:54: ERROR:  duplicate key value violates unique constraint "uq_price_ticks_source_event"
+DETAIL:  Key (source, instrument_id, source_event_id)=(REPLAY, 1, r2demo:000006) already exists.
+<<< actual SQLSTATE: 23505
+the official path ingest_tick() turns the same duplicate into status DUPLICATE (ON CONFLICT DO NOTHING)
+SELECT * FROM ingest_tick('NSE', 'RELIANCE',
+                          (SELECT observed_at FROM price_ticks WHERE source_event_id = 'r2demo:000006'),
+                          3002.40, 1500, 'REPLAY', 'r2demo:000006');
+  status   | tick_id 
+-----------+---------
+ DUPLICATE |  (null)
+(1 row)
+
+===== UNIQUE (rule_id, tick_id) on alert_events =====
+>>> EXPECTED ERROR [23505] rule 1 already fired on tick 6 (event 1)
+INSERT INTO alert_events (rule_id, tick_id) VALUES (1, 6);
+psql:sql/review2/03_constraints.sql:63: ERROR:  duplicate key value violates unique constraint "uq_alert_events_rule_tick"
+DETAIL:  Key (rule_id, tick_id)=(1, 6) already exists.
+<<< actual SQLSTATE: 23505
+===== Composite PRIMARY KEY (watchlist_id, instrument_id) on watchlist_items =====
+>>> EXPECTED ERROR [23505] RELIANCE is already in arjun "Long Term"
+INSERT INTO watchlist_items (watchlist_id, instrument_id)
+SELECT w.watchlist_id, i.instrument_id
+FROM watchlists w JOIN users u ON u.user_id = w.user_id
+JOIN instruments i ON i.exchange = 'NSE' AND i.symbol = 'RELIANCE'
+WHERE u.username = 'arjun' AND w.name = 'Long Term';
+psql:sql/review2/03_constraints.sql:72: ERROR:  duplicate key value violates unique constraint "pk_watchlist_items"
+DETAIL:  Key (watchlist_id, instrument_id)=(2, 1) already exists.
+<<< actual SQLSTATE: 23505
+===== FOREIGN KEY =====
+>>> EXPECTED ERROR [23503] watchlist for a user_id that does not exist
+INSERT INTO watchlists (user_id, name) VALUES (999, 'Ghost list');
+psql:sql/review2/03_constraints.sql:77: ERROR:  insert or update on table "watchlists" violates foreign key constraint "fk_watchlists_user"
+DETAIL:  Key (user_id)=(999) is not present in table "users".
+<<< actual SQLSTATE: 23503
+===== CHECK constraints =====
+>>> EXPECTED ERROR [23514] ck_price_ticks_price_pos (price must be > 0)
+INSERT INTO price_ticks (instrument_id, observed_at, price, source, source_event_id)
+VALUES (1, now(), -5, 'MANUAL', 'check-demo-1');
+psql:sql/review2/03_constraints.sql:83: ERROR:  new row for relation "price_ticks" violates check constraint "ck_price_ticks_price_pos"
+DETAIL:  Failing row contains (33, 1, 2026-10-13 10:03:36.577646+05:30, -5.00000000, null, MANUAL, check-demo-1, 2026-10-13 10:03:36.577646+05:30).
+<<< actual SQLSTATE: 23514
+>>> EXPECTED ERROR [23514] ck_alert_rules_direction (only ABOVE or BELOW)
+INSERT INTO alert_rules (user_id, instrument_id, direction, threshold)
+VALUES (1, 1, 'SIDEWAYS', 3000);
+psql:sql/review2/03_constraints.sql:87: ERROR:  new row for relation "alert_rules" violates check constraint "ck_alert_rules_direction"
+DETAIL:  Failing row contains (8, 1, 1, SIDEWAYS, 3000.00000000, 300, t, 2026-10-13 10:03:36.577646+05:30).
+<<< actual SQLSTATE: 23514
+>>> EXPECTED ERROR [23514] ck_users_username_format (lower-case letters, digits, _)
+INSERT INTO users (username, email) VALUES ('Bad Name!', 'bad@example.com');
+psql:sql/review2/03_constraints.sql:90: ERROR:  new row for relation "users" violates check constraint "ck_users_username_format"
+DETAIL:  Failing row contains (5, Bad Name!, bad@example.com, 2026-10-13 10:03:36.577646+05:30).
+<<< actual SQLSTATE: 23514
+>>> EXPECTED ERROR [23514] ck_alert_rules_cooldown_nonneg (cooldown >= 0)
+UPDATE alert_rules SET cooldown_seconds = -1 WHERE rule_id = 4;
+psql:sql/review2/03_constraints.sql:93: ERROR:  new row for relation "alert_rules" violates check constraint "ck_alert_rules_cooldown_nonneg"
+DETAIL:  Failing row contains (4, 2, 2, BELOW, 3500.00000000, -1, t, 2026-10-13 10:03:36.119478+05:30).
+<<< actual SQLSTATE: 23514
+===== NOT NULL =====
+>>> EXPECTED ERROR [23502] email is NOT NULL
+INSERT INTO users (username, email) VALUES ('no_email', NULL);
+psql:sql/review2/03_constraints.sql:98: ERROR:  null value in column "email" of relation "users" violates not-null constraint
+DETAIL:  Failing row contains (6, no_email, null, 2026-10-13 10:03:36.577646+05:30).
+<<< actual SQLSTATE: 23502
+allowed: volume is the only nullable business column (NULL = unknown, not zero)
+SELECT column_name, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'price_ticks' AND column_name IN ('price', 'volume')
+ORDER BY column_name;
+ column_name | is_nullable 
+-------------+-------------
+ price       | NO
+ volume      | YES
+(2 rows)
+
+===== GENERATED ALWAYS AS IDENTITY =====
+>>> EXPECTED ERROR [428C9] user_id is generated; a client may not supply it
+INSERT INTO users (user_id, username, email) VALUES (99, 'manual_id', 'manual@example.com');
+psql:sql/review2/03_constraints.sql:108: ERROR:  cannot insert a non-DEFAULT value into column "user_id"
+DETAIL:  Column "user_id" is an identity column defined as GENERATED ALWAYS.
+HINT:  Use OVERRIDING SYSTEM VALUE to override.
+<<< actual SQLSTATE: 428C9
+===== ON DELETE RESTRICT =====
+>>> EXPECTED ERROR [23001] RELIANCE has price ticks, rules and watchlist items (RESTRICT)
+DELETE FROM instruments WHERE exchange = 'NSE' AND symbol = 'RELIANCE';
+psql:sql/review2/03_constraints.sql:115: ERROR:  update or delete on table "instruments" violates RESTRICT setting of foreign key constraint "fk_watchlist_items_instrument" on table "watchlist_items"
+DETAIL:  Key (instrument_id)=(1) is referenced from table "watchlist_items".
+<<< actual SQLSTATE: 23001
+ROLLBACK;
+===== After ROLLBACK: nothing above was kept =====
+SELECT (SELECT count(*) FROM instruments) AS instruments,
+       (SELECT count(*) FROM watchlists)  AS watchlists,
+       (SELECT count(*) FROM price_ticks) AS price_ticks,
+       (SELECT count(*) FROM alert_events) AS alert_events,
+       (SELECT count(*) FROM users)       AS users;
+ instruments | watchlists | price_ticks | alert_events | users 
+-------------+------------+-------------+--------------+-------
+           7 |          5 |          30 |            8 |     3
+(1 row)
+

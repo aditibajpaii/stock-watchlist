@@ -1,0 +1,412 @@
+### Proposed integrity fix: regression test on stock_watchlist_review2_fixtest
+### built from sql/00_schema.sql, 01_seed.sql, 03_functions_triggers.sql, 06_indexes.sql + replay run r2demo
+
+### STEP 2. Phase BEFORE (production design, no fix)
+SELECT current_database() = 'stock_watchlist_review2_fixtest' AS in_fixtest 
+SELECT 'before' = 'before' AS before_fix 
+===== Phase: before =====
+===== C1. Triggers on the three tables involved (catalog) =====
+SELECT c.relname AS table_name, t.tgname, pg_get_triggerdef(t.oid) AS definition
+FROM pg_trigger t
+JOIN pg_class c ON c.oid = t.tgrelid
+WHERE NOT t.tgisinternal AND c.relname IN ('alert_events', 'alert_rules', 'price_ticks')
+ORDER BY c.relname, t.tgname;
+  table_name  |              tgname               |                                                                                    definition                                                                                    
+--------------+-----------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ alert_events | trg_alert_events_check_instrument | CREATE TRIGGER trg_alert_events_check_instrument BEFORE INSERT OR UPDATE OF rule_id, tick_id ON public.alert_events FOR EACH ROW EXECUTE FUNCTION check_alert_event_instrument()
+ price_ticks  | trg_price_ticks_evaluate_alerts   | CREATE TRIGGER trg_price_ticks_evaluate_alerts AFTER INSERT ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION evaluate_price_alerts()
+(2 rows)
+
+===== C2. ON UPDATE action of every foreign key (a = NO ACTION: no cascading update path) =====
+SELECT conrelid::regclass AS child, conname, confrelid::regclass AS parent, confupdtype
+FROM pg_constraint
+WHERE contype = 'f' AND connamespace = 'public'::regnamespace
+ORDER BY 1, 2;
+      child      |            conname            |   parent    | confupdtype 
+-----------------+-------------------------------+-------------+-------------
+ watchlists      | fk_watchlists_user            | users       | a
+ watchlist_items | fk_watchlist_items_instrument | instruments | a
+ watchlist_items | fk_watchlist_items_watchlist  | watchlists  | a
+ price_ticks     | fk_price_ticks_instrument     | instruments | a
+ alert_rules     | fk_alert_rules_instrument     | instruments | a
+ alert_rules     | fk_alert_rules_user           | users       | a
+ alert_events    | fk_alert_events_rule          | alert_rules | a
+ alert_events    | fk_alert_events_tick          | price_ticks | a
+(8 rows)
+
+BEGIN;
+CREATE TEMP VIEW mismatched_events AS
+SELECT e.event_id, e.rule_id, r.instrument_id AS rule_instrument,
+       e.tick_id, t.instrument_id AS tick_instrument
+FROM alert_events e
+JOIN alert_rules r ON r.rule_id = e.rule_id
+JOIN price_ticks t ON t.tick_id = e.tick_id
+WHERE r.instrument_id <> t.instrument_id;
+events whose rule and tick refer to different instruments, at the start (expect 0):
+SELECT count(*) AS mismatched FROM mismatched_events;
+ mismatched 
+------------
+          0
+(1 row)
+
+SELECT min(r.rule_id) AS idle_rule FROM alert_rules r
+WHERE NOT EXISTS (SELECT 1 FROM alert_events e WHERE e.rule_id = r.rule_id) 
+SELECT min(t.tick_id) AS idle_tick FROM price_ticks t
+WHERE NOT EXISTS (SELECT 1 FROM alert_events e WHERE e.tick_id = t.tick_id) 
+SELECT 5 AS idle_rule, 1 AS idle_tick;
+ idle_rule | idle_tick 
+-----------+-----------
+         5 |         1
+(1 row)
+
+SAVEPOINT start;
+===== B1. Before the fix: UPDATE of alert_rules.instrument_id is ACCEPTED =====
+UPDATE alert_rules SET instrument_id = 2 WHERE rule_id = 1
+RETURNING rule_id, instrument_id;
+ rule_id | instrument_id 
+---------+---------------
+       1 |             2
+(1 row)
+
+SELECT * FROM mismatched_events ORDER BY event_id;
+ event_id | rule_id | rule_instrument | tick_id | tick_instrument 
+----------+---------+-----------------+---------+-----------------
+        1 |       1 |               2 |       6 |               1
+        7 |       1 |               2 |      27 |               1
+(2 rows)
+
+ROLLBACK TO SAVEPOINT start;
+===== B2. Before the fix: UPDATE of price_ticks.instrument_id is ACCEPTED =====
+UPDATE price_ticks SET instrument_id = 2 WHERE tick_id = 6
+RETURNING tick_id, instrument_id;
+ tick_id | instrument_id 
+---------+---------------
+       6 |             2
+(1 row)
+
+SELECT * FROM mismatched_events ORDER BY event_id;
+ event_id | rule_id | rule_instrument | tick_id | tick_instrument 
+----------+---------+-----------------+---------+-----------------
+        1 |       1 |               1 |       6 |               2
+(1 row)
+
+ROLLBACK TO SAVEPOINT start;
+ROLLBACK;
+===== After ROLLBACK (expect 0) =====
+SELECT count(*) AS mismatched
+FROM alert_events e
+JOIN alert_rules r ON r.rule_id = e.rule_id
+JOIN price_ticks t ON t.tick_id = e.tick_id
+WHERE r.instrument_id <> t.instrument_id;
+ mismatched 
+------------
+          0
+(1 row)
+
+
+### STEP 3. Apply sql/review2/proposed/integrity_parent_update_fix.sql
+SELECT 'false'::boolean
+       OR current_database() NOT IN ('stock_watchlist', 'stock_watchlist_benchmark',
+                                     'stock_watchlist_review2_sandbox') AS fix_target_ok 
+BEGIN;
+CREATE OR REPLACE FUNCTION forbid_instrument_change()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.instrument_id IS DISTINCT FROM OLD.instrument_id THEN
+        RAISE EXCEPTION '%: instrument_id cannot be changed (row %, % -> %)',
+            TG_TABLE_NAME,
+            to_jsonb(OLD) ->> CASE TG_TABLE_NAME WHEN 'alert_rules' THEN 'rule_id'
+                                                 ELSE 'tick_id' END,
+            OLD.instrument_id, NEW.instrument_id
+        USING ERRCODE    = 'check_violation',
+              CONSTRAINT = TG_NAME,
+              HINT       = 'An alert event''s rule and tick must stay on the same instrument. '
+                           'Create a new rule (or ingest a new tick) instead.';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trg_alert_rules_instrument_immutable
+    BEFORE UPDATE OF instrument_id ON alert_rules
+    FOR EACH ROW
+    EXECUTE FUNCTION forbid_instrument_change();
+CREATE OR REPLACE TRIGGER trg_price_ticks_instrument_immutable
+    BEFORE UPDATE OF instrument_id ON price_ticks
+    FOR EACH ROW
+    EXECUTE FUNCTION forbid_instrument_change();
+COMMIT;
+
+### STEP 4. Phase AFTER (fix applied)
+SELECT current_database() = 'stock_watchlist_review2_fixtest' AS in_fixtest 
+SELECT 'after' = 'before' AS before_fix 
+===== Phase: after =====
+===== C1. Triggers on the three tables involved (catalog) =====
+SELECT c.relname AS table_name, t.tgname, pg_get_triggerdef(t.oid) AS definition
+FROM pg_trigger t
+JOIN pg_class c ON c.oid = t.tgrelid
+WHERE NOT t.tgisinternal AND c.relname IN ('alert_events', 'alert_rules', 'price_ticks')
+ORDER BY c.relname, t.tgname;
+  table_name  |                tgname                |                                                                                    definition                                                                                    
+--------------+--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ alert_events | trg_alert_events_check_instrument    | CREATE TRIGGER trg_alert_events_check_instrument BEFORE INSERT OR UPDATE OF rule_id, tick_id ON public.alert_events FOR EACH ROW EXECUTE FUNCTION check_alert_event_instrument()
+ alert_rules  | trg_alert_rules_instrument_immutable | CREATE TRIGGER trg_alert_rules_instrument_immutable BEFORE UPDATE OF instrument_id ON public.alert_rules FOR EACH ROW EXECUTE FUNCTION forbid_instrument_change()
+ price_ticks  | trg_price_ticks_evaluate_alerts      | CREATE TRIGGER trg_price_ticks_evaluate_alerts AFTER INSERT ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION evaluate_price_alerts()
+ price_ticks  | trg_price_ticks_instrument_immutable | CREATE TRIGGER trg_price_ticks_instrument_immutable BEFORE UPDATE OF instrument_id ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION forbid_instrument_change()
+(4 rows)
+
+===== C2. ON UPDATE action of every foreign key (a = NO ACTION: no cascading update path) =====
+SELECT conrelid::regclass AS child, conname, confrelid::regclass AS parent, confupdtype
+FROM pg_constraint
+WHERE contype = 'f' AND connamespace = 'public'::regnamespace
+ORDER BY 1, 2;
+      child      |            conname            |   parent    | confupdtype 
+-----------------+-------------------------------+-------------+-------------
+ watchlists      | fk_watchlists_user            | users       | a
+ watchlist_items | fk_watchlist_items_instrument | instruments | a
+ watchlist_items | fk_watchlist_items_watchlist  | watchlists  | a
+ price_ticks     | fk_price_ticks_instrument     | instruments | a
+ alert_rules     | fk_alert_rules_instrument     | instruments | a
+ alert_rules     | fk_alert_rules_user           | users       | a
+ alert_events    | fk_alert_events_rule          | alert_rules | a
+ alert_events    | fk_alert_events_tick          | price_ticks | a
+(8 rows)
+
+BEGIN;
+CREATE TEMP VIEW mismatched_events AS
+SELECT e.event_id, e.rule_id, r.instrument_id AS rule_instrument,
+       e.tick_id, t.instrument_id AS tick_instrument
+FROM alert_events e
+JOIN alert_rules r ON r.rule_id = e.rule_id
+JOIN price_ticks t ON t.tick_id = e.tick_id
+WHERE r.instrument_id <> t.instrument_id;
+events whose rule and tick refer to different instruments, at the start (expect 0):
+SELECT count(*) AS mismatched FROM mismatched_events;
+ mismatched 
+------------
+          0
+(1 row)
+
+SELECT min(r.rule_id) AS idle_rule FROM alert_rules r
+WHERE NOT EXISTS (SELECT 1 FROM alert_events e WHERE e.rule_id = r.rule_id) 
+SELECT min(t.tick_id) AS idle_tick FROM price_ticks t
+WHERE NOT EXISTS (SELECT 1 FROM alert_events e WHERE e.tick_id = t.tick_id) 
+SELECT 5 AS idle_rule, 1 AS idle_tick;
+ idle_rule | idle_tick 
+-----------+-----------
+         5 |         1
+(1 row)
+
+SAVEPOINT start;
+===== T1. The fix in the catalog: function and its two triggers =====
+SELECT p.proname, pg_get_function_result(p.oid) AS returns
+FROM pg_proc p WHERE p.proname = 'forbid_instrument_change';
+         proname          | returns 
+--------------------------+---------
+ forbid_instrument_change | trigger
+(1 row)
+
+SELECT c.relname AS table_name, t.tgname, t.tgenabled
+FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+WHERE t.tgname LIKE '%instrument_immutable' ORDER BY 1;
+ table_name  |                tgname                | tgenabled 
+-------------+--------------------------------------+-----------
+ alert_rules | trg_alert_rules_instrument_immutable | O
+ price_ticks | trg_price_ticks_instrument_immutable | O
+(2 rows)
+
+===== PROHIBITED: changing instrument_id on a parent row =====
+>>> EXPECTED ERROR [23514] T2 rule 1 (has events) moved to instrument 2
+UPDATE alert_rules SET instrument_id = 2 WHERE rule_id = 1;
+psql:sql/review2/proposed/integrity_parent_update_fix_tests.sql:87: ERROR:  alert_rules: instrument_id cannot be changed (row 1, 1 -> 2)
+HINT:  An alert event's rule and tick must stay on the same instrument. Create a new rule (or ingest a new tick) instead.
+CONTEXT:  PL/pgSQL function forbid_instrument_change() line 4 at RAISE
+<<< actual SQLSTATE: 23514
+ROLLBACK TO SAVEPOINT start;
+>>> EXPECTED ERROR [23514] T3 tick 6 (has an event) moved to instrument 2
+UPDATE price_ticks SET instrument_id = 2 WHERE tick_id = 6;
+psql:sql/review2/proposed/integrity_parent_update_fix_tests.sql:94: ERROR:  price_ticks: instrument_id cannot be changed (row 6, 1 -> 2)
+HINT:  An alert event's rule and tick must stay on the same instrument. Create a new rule (or ingest a new tick) instead.
+CONTEXT:  PL/pgSQL function forbid_instrument_change() line 4 at RAISE
+<<< actual SQLSTATE: 23514
+ROLLBACK TO SAVEPOINT start;
+>>> EXPECTED ERROR [23514] T4 a rule WITHOUT events is also immutable
+UPDATE alert_rules SET instrument_id = 2 WHERE rule_id = 5;
+psql:sql/review2/proposed/integrity_parent_update_fix_tests.sql:101: ERROR:  alert_rules: instrument_id cannot be changed (row 5, 3 -> 2)
+HINT:  An alert event's rule and tick must stay on the same instrument. Create a new rule (or ingest a new tick) instead.
+CONTEXT:  PL/pgSQL function forbid_instrument_change() line 4 at RAISE
+<<< actual SQLSTATE: 23514
+ROLLBACK TO SAVEPOINT start;
+>>> EXPECTED ERROR [23514] T5 a tick WITHOUT events is also immutable
+UPDATE price_ticks SET instrument_id = 2 WHERE tick_id = 1;
+psql:sql/review2/proposed/integrity_parent_update_fix_tests.sql:108: ERROR:  price_ticks: instrument_id cannot be changed (row 1, 1 -> 2)
+HINT:  An alert event's rule and tick must stay on the same instrument. Create a new rule (or ingest a new tick) instead.
+CONTEXT:  PL/pgSQL function forbid_instrument_change() line 4 at RAISE
+<<< actual SQLSTATE: 23514
+ROLLBACK TO SAVEPOINT start;
+SELECT count(*) AS instrument_1_ticks_before FROM price_ticks WHERE instrument_id = 1;
+ instrument_1_ticks_before 
+---------------------------
+                        12
+(1 row)
+
+>>> EXPECTED ERROR [23514] T6 multi-row UPDATE: the whole statement is rejected
+UPDATE price_ticks SET instrument_id = 2 WHERE instrument_id = 1;
+psql:sql/review2/proposed/integrity_parent_update_fix_tests.sql:116: ERROR:  price_ticks: instrument_id cannot be changed (row 1, 1 -> 2)
+HINT:  An alert event's rule and tick must stay on the same instrument. Create a new rule (or ingest a new tick) instead.
+CONTEXT:  PL/pgSQL function forbid_instrument_change() line 4 at RAISE
+<<< actual SQLSTATE: 23514
+ROLLBACK TO SAVEPOINT start;
+SELECT count(*) AS instrument_1_ticks_after FROM price_ticks WHERE instrument_id = 1;
+ instrument_1_ticks_after 
+--------------------------
+                       12
+(1 row)
+
+===== STILL ALLOWED =====
+T7 setting instrument_id to its current value (no change) is allowed:
+WITH u AS (UPDATE price_ticks SET instrument_id = instrument_id WHERE instrument_id = 1 RETURNING 1)
+SELECT count(*) AS rows_updated FROM u;
+ rows_updated 
+--------------
+           12
+(1 row)
+
+ROLLBACK TO SAVEPOINT start;
+T8 the API PATCH /alert-rules statement (app/main.py update_alert_rule), unchanged:
+UPDATE alert_rules
+   SET is_active        = coalesce(false, is_active),
+       cooldown_seconds = coalesce(120, cooldown_seconds)
+ WHERE rule_id = 1 RETURNING rule_id, is_active, cooldown_seconds;
+ rule_id | is_active | cooldown_seconds 
+---------+-----------+------------------
+       1 | f         |              120
+(1 row)
+
+ROLLBACK TO SAVEPOINT start;
+T9 other columns of a tick can still be corrected (trigger fires only on UPDATE OF instrument_id):
+UPDATE price_ticks SET volume = 10 WHERE tick_id = 6 RETURNING tick_id, instrument_id, volume;
+ tick_id | instrument_id |   volume    
+---------+---------------+-------------
+       6 |             1 | 10.00000000
+(1 row)
+
+ROLLBACK TO SAVEPOINT start;
+T10 ingest_tick still stores ticks and the alert engine still fires (rule 1: RELIANCE ABOVE 3000):
+SELECT max(observed_at) AS last_obs FROM price_ticks WHERE instrument_id = 1 
+SELECT count(*) AS rule1_events_before FROM alert_events WHERE rule_id = 1;
+ rule1_events_before 
+---------------------
+                   2
+(1 row)
+
+SELECT * FROM ingest_tick('NSE', 'RELIANCE', '2026-10-13 10:10:53+05:30'::timestamptz + interval '1 day',
+                          2999.00, NULL, 'MANUAL', 'fixtest-below');
+  status  | tick_id 
+----------+---------
+ INSERTED |      31
+(1 row)
+
+SELECT * FROM ingest_tick('NSE', 'RELIANCE', '2026-10-13 10:10:53+05:30'::timestamptz + interval '2 days',
+                          3001.00, NULL, 'MANUAL', 'fixtest-above');
+  status  | tick_id 
+----------+---------
+ INSERTED |      32
+(1 row)
+
+SELECT count(*) AS rule1_events_after FROM alert_events WHERE rule_id = 1;
+ rule1_events_after 
+--------------------
+                  3
+(1 row)
+
+ROLLBACK TO SAVEPOINT start;
+>>> EXPECTED ERROR [23514] T11 the existing check on alert_events still rejects a mismatched event
+UPDATE alert_events SET tick_id = 2 WHERE event_id = 1;
+psql:sql/review2/proposed/integrity_parent_update_fix_tests.sql:151: ERROR:  alert_events: rule 1 is for instrument 1, but tick 2 is for instrument 2
+HINT:  An alert event must pair a rule and a price tick of the same instrument.
+CONTEXT:  PL/pgSQL function check_alert_event_instrument() line 16 at RAISE
+<<< actual SQLSTATE: 23514
+ROLLBACK TO SAVEPOINT start;
+T12 deletes are unchanged: deleting rule 1 cascades to its events
+SELECT count(*) AS rule1_events FROM alert_events WHERE rule_id = 1;
+ rule1_events 
+--------------
+            2
+(1 row)
+
+DELETE FROM alert_rules WHERE rule_id = 1 RETURNING rule_id;
+ rule_id 
+---------
+       1
+(1 row)
+
+SELECT count(*) AS rule1_events_after_delete FROM alert_events WHERE rule_id = 1;
+ rule1_events_after_delete 
+---------------------------
+                         0
+(1 row)
+
+ROLLBACK TO SAVEPOINT start;
+>>> EXPECTED ERROR [428C9] T13 the instrument key itself cannot be changed either (identity column)
+UPDATE instruments SET instrument_id = 99 WHERE instrument_id = 1;
+psql:sql/review2/proposed/integrity_parent_update_fix_tests.sql:164: ERROR:  column "instrument_id" can only be updated to DEFAULT
+DETAIL:  Column "instrument_id" is an identity column defined as GENERATED ALWAYS.
+<<< actual SQLSTATE: 428C9
+ROLLBACK TO SAVEPOINT start;
+ROLLBACK;
+===== After ROLLBACK (expect 0) =====
+SELECT count(*) AS mismatched
+FROM alert_events e
+JOIN alert_rules r ON r.rule_id = e.rule_id
+JOIN price_ticks t ON t.tick_id = e.tick_id
+WHERE r.instrument_id <> t.instrument_id;
+ mismatched 
+------------
+          0
+(1 row)
+
+
+### STEP 8. Undo with sql/review2/proposed/integrity_parent_update_fix_rollback.sql, then sql/verify_spec.sql
+BEGIN;
+DROP TRIGGER IF EXISTS trg_alert_rules_instrument_immutable ON alert_rules;
+DROP TRIGGER IF EXISTS trg_price_ticks_instrument_immutable ON price_ticks;
+DROP FUNCTION IF EXISTS forbid_instrument_change();
+COMMIT;
+===== 1. Column mismatches (expect 0 rows) =====
+ tbl | col | problem | expected_type | live_type | expected_null | live_null | expected_default | live_default 
+-----+-----+---------+---------------+-----------+---------------+-----------+------------------+--------------
+
+===== 2. Constraint mismatches (expect 0 rows) =====
+ constraint_name | problem | expected_table | live_table | expected_def | live_def 
+-----------------+---------+----------------+------------+--------------+----------
+
+===== 3. Function / trigger / index mismatches (expect 0 rows) =====
+ kind | name | problem | expected_def | live_def 
+------+------+---------+--------------+----------
+
+===== 3b. Functions, triggers and non-constraint indexes present =====
+   kind   |               name                |                                                                                                   def                                                                                                    
+----------+-----------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ function | check_alert_event_instrument      | check_alert_event_instrument() RETURNS trigger
+ function | evaluate_price_alerts             | evaluate_price_alerts() RETURNS trigger
+ function | ingest_tick                       | ingest_tick(p_exchange text, p_symbol text, p_observed_at timestamp with time zone, p_price numeric, p_volume numeric, p_source text, p_source_event_id text) RETURNS TABLE(status text, tick_id bigint)
+ index    | ix_price_ticks_instrument_time    | CREATE INDEX ix_price_ticks_instrument_time ON public.price_ticks USING btree (instrument_id, observed_at DESC, tick_id DESC)
+ trigger  | trg_alert_events_check_instrument | CREATE TRIGGER trg_alert_events_check_instrument BEFORE INSERT OR UPDATE OF rule_id, tick_id ON public.alert_events FOR EACH ROW EXECUTE FUNCTION check_alert_event_instrument()
+ trigger  | trg_price_ticks_evaluate_alerts   | CREATE TRIGGER trg_price_ticks_evaluate_alerts AFTER INSERT ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION evaluate_price_alerts()
+
+===== 4. Relationships derived from foreign keys =====
+   parent    |      child      |              fk               |  fk_columns   | cardinality |       child_participation        | on_delete 
+-------------+-----------------+-------------------------------+---------------+-------------+----------------------------------+-----------
+ alert_rules | alert_events    | fk_alert_events_rule          | rule_id       | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+ instruments | alert_rules     | fk_alert_rules_instrument     | instrument_id | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ instruments | price_ticks     | fk_price_ticks_instrument     | instrument_id | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ instruments | watchlist_items | fk_watchlist_items_instrument | instrument_id | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ price_ticks | alert_events    | fk_alert_events_tick          | tick_id       | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ users       | alert_rules     | fk_alert_rules_user           | user_id       | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+ users       | watchlists      | fk_watchlists_user            | user_id       | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+ watchlists  | watchlist_items | fk_watchlist_items_watchlist  | watchlist_id  | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+
+psql:sql/verify_spec.sql:246: NOTICE:  columns checked: 37, constraints checked: 36, functions/triggers/indexes checked: 6
+psql:sql/verify_spec.sql:246: NOTICE:  LIVE SCHEMA MATCHES docs/SCHEMA_DESIGN.md (tables, constraints, functions/triggers, index)
