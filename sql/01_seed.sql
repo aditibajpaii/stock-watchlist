@@ -1,7 +1,7 @@
 -- =====================================================================
 -- 01_seed.sql
 -- Small deterministic demo data. No price_ticks (those come from
--- ingestion in later phases).
+-- ingest_tick()).
 --
 -- Run:  psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/01_seed.sql
 -- Re-runnable: empties all tables and restarts identity counters

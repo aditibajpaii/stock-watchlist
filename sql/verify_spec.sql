@@ -1,8 +1,8 @@
 -- =====================================================================
 -- verify_spec.sql
--- Compares the LIVE PostgreSQL catalog against docs/PHASE1_SPEC.md
--- (tables + constraints), the approved Phase 4 functions/triggers and the
--- approved Phase 6 index.
+-- Compares the LIVE PostgreSQL catalog against docs/SCHEMA_DESIGN.md
+-- (tables + constraints), the functions/triggers in
+-- 03_functions_triggers.sql and the index in 06_indexes.sql.
 -- Read-only. Every expected fact is written below as data, then diffed
 -- against pg_catalog. Any mismatch is printed; psql exits non-zero if
 -- anything differs.
@@ -142,7 +142,7 @@ WHERE l.conname IS NULL OR e.conname IS NULL
    OR e.tbl <> l.tbl OR e.def <> l.def;
 
 -- ---------------------------------------------------------------------
--- 3. Functions, triggers and non-constraint indexes (Phase 4 + Phase 6)
+-- 3. Functions, triggers and non-constraint indexes
 --    Exactly these public functions, user triggers and non-constraint
 --    indexes must exist, with these exact definitions. Indexes created by
 --    PK/UNIQUE constraints are already covered by section 2. Any OTHER
@@ -242,5 +242,5 @@ BEGIN
         RAISE EXCEPTION 'SPEC MISMATCH: % column, % constraint, % function/trigger/index differences',
             n_col, n_con, n_obj;
     END IF;
-    RAISE NOTICE 'LIVE SCHEMA MATCHES docs/PHASE1_SPEC.md (tables, constraints, Phase 4 functions/triggers, Phase 6 index)';
+    RAISE NOTICE 'LIVE SCHEMA MATCHES docs/SCHEMA_DESIGN.md (tables, constraints, functions/triggers, index)';
 END $$;

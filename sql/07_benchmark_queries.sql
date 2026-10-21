@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 07_benchmark_queries.sql
--- Manual, screenshot-friendly BEFORE/AFTER comparison of the Phase 6
+-- Manual, screenshot-friendly BEFORE/AFTER comparison of the price-history
 -- index on the THROWAWAY benchmark database.
 --
 -- Prerequisite: python tests/benchmark_indexes.py

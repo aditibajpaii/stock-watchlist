@@ -1,4 +1,4 @@
-# Live Binance feed (Phase 9): developer / study notes
+# Live Binance feed
 
 This feed is optional. The project works fully without it. The guaranteed
 demo path stays the offline replay:
@@ -210,9 +210,8 @@ There is no browser SQL endpoint and no admin panel.
 - **Fixtures:** in the documented combined-stream aggTrade format.
 - **Network:** replaced by fake connections, plus one real WebSocket
   server on 127.0.0.1.
-- **Database:** a throwaway DB `stock_watchlist_p9_test`, cloned per
+- **Database:** a throwaway DB `stock_watchlist_livefeed_test`, cloned per
   test; the dev DB is never touched.
-- The coverage list is in docs/FACT_SHEET.md.
 
 ## 12. Limitations
 

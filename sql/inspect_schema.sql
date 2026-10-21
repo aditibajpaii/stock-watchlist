@@ -1,10 +1,4 @@
--- =====================================================================
--- inspect_schema.sql
--- Read-only metadata queries used for verification and report
--- screenshots. Changes nothing.
---
--- Run:  psql -d stock_watchlist -f sql/inspect_schema.sql
--- =====================================================================
+
 
 \echo '===== Server version ====='
 SELECT version();
@@ -53,9 +47,9 @@ SELECT conrelid::regclass  AS child_table,
                         WHEN 'd' THEN 'SET DEFAULT' END AS on_delete
 FROM pg_constraint
 WHERE connamespace = 'public'::regnamespace AND contype = 'f'
-ORDER BY child_table::text, conname;
+ORDER BY conrelid::regclass::text, conname;
 
-\echo '===== Indexes (currently only those created by PK / UNIQUE) ====='
+\echo '===== Indexes (from PK / UNIQUE constraints, plus ix_price_ticks_instrument_time) ====='
 SELECT tablename, indexname, indexdef
 FROM pg_indexes
 WHERE schemaname = 'public'

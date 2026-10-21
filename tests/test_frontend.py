@@ -1,4 +1,4 @@
-"""Phase 8 frontend-serving tests - FastAPI TestClient, no Node/npm.
+"""Frontend-serving tests - FastAPI TestClient, no Node/npm.
 
 Checks that FastAPI serves the plain HTML/CSS/JS UI, that the API and
 /docs still work next to it, and scans the frontend files for things
@@ -30,7 +30,7 @@ PG_BIN = Path(os.environ.get("PG_BIN", "/opt/homebrew/opt/postgresql@18/bin"))
 TEST_DB = "stock_watchlist_frontend_test"
 FRONTEND_FILES = ["index.html", "styles.css", "api.js", "app.js"]
 
-# the 18 Phase 7 API endpoints (method, path)
+# the 18 API endpoints (method, path)
 API_ROUTES = {
     ("GET", "/health"), ("GET", "/users"), ("GET", "/users/{user_id}"),
     ("GET", "/instruments"), ("GET", "/instruments/{instrument_id}"),
@@ -152,7 +152,7 @@ class FrontendTests(unittest.TestCase):
     def test_04_docs_still_work_and_ui_is_not_in_the_api_schema(self):
         self.assertEqual(self.client.get("/docs").status_code, 200)
         spec = self.client.get("/openapi.json").json()
-        self.assertEqual(len(spec["paths"]), 15)            # unchanged since Phase 7
+        self.assertEqual(len(spec["paths"]), 15)            # the UI adds no API paths
         self.assertNotIn("/", spec["paths"])
         self.assertFalse(any(p.startswith("/static") for p in spec["paths"]))
 
@@ -250,7 +250,7 @@ class FrontendTests(unittest.TestCase):
                 self.assertNotRegex(text, r"\.innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\(|new Function")
 
 
-    # Phase 9 -------------------------------------------------------
+    # live refresh ----------------------------------------------------
     def test_14_live_refresh_is_off_by_default_and_bounded(self):
         page = read("index.html")
         self.assertRegex(page, r'id="live-toggle"[^>]*aria-pressed="false"[^>]*>Live refresh: OFF<')

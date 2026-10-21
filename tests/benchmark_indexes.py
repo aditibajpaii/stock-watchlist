@@ -1,4 +1,4 @@
-"""Phase 6 index benchmark on a THROWAWAY database.
+"""Index benchmark on a THROWAWAY database.
 
 Builds stock_watchlist_benchmark from sql/00, 01, 03, bulk-loads synthetic
 price ticks, then measures the project's real query shapes in three stages:

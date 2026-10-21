@@ -1,7 +1,6 @@
-# Frontend (Phase 8): developer / study notes
+# Frontend
 
 Plain HTML + CSS + JavaScript, served by the same FastAPI app as the API.
-Factual notes only, not report text.
 
 ```
 Browser (index.html + styles.css + api.js + app.js)
@@ -65,7 +64,7 @@ uvicorn app.main:app --reload
 | Instruments | exchange, symbol, name, currency, active; search + exchange filter (ALL / NSE / BSE / BINANCE, done in the browser); "Latest price & history" panel with SVG chart and table (latest 50 or 100) | `GET /instruments`, `GET /instruments/{id}/latest`, `GET /instruments/{id}/history?limit=` |
 | Demo | manual tick form (exchange, symbol, price, optional volume); result INSERTED/DUPLICATE + tick_id; new latest price; alerts recorded for this tick; "Resend last tick"; offline replay command (text only) | `POST /ticks/ingest`, then the loaders above |
 
-Every endpoint the UI uses already existed in Phase 7. None was added.
+The UI uses only the existing API endpoints; it adds none.
 
 ## 5. Rules the code follows
 
@@ -83,7 +82,7 @@ Every endpoint the UI uses already existed in Phase 7. None was added.
 | "No ticks" | the 404 "Instrument has no price ticks yet." is shown as "No price data yet", not as an error. |
 | Health | header badge: "API + database connected" (200), "Database unavailable" (503), "Server unreachable" (no response). |
 | Refresh | the button reloads health, instruments, the user's watchlists, rules and alerts, and the open instrument panel. |
-| Live refresh (Phase 9) | header button, **OFF by default**. When ON, every 5 s (`LIVE_INTERVAL_MS`) it re-reads `/health`, watchlists, alerts and the open instrument panel "quietly" (old content stays until new data arrives). A refresh is skipped while the previous one is still running, while the tab is hidden, or while a form field in the page has focus. OFF clears the timer. It switches itself off with a message if the server or database becomes unavailable. This is polling of the normal endpoints, not SSE/WebSocket. |
+| Live refresh | header button, **OFF by default**. When ON, every 5 s (`LIVE_INTERVAL_MS`) it re-reads `/health`, watchlists, alerts and the open instrument panel "quietly" (old content stays until new data arrives). A refresh is skipped while the previous one is still running, while the tab is hidden, or while a form field in the page has focus. OFF clears the timer. It switches itself off with a message if the server or database becomes unavailable. This is polling of the normal endpoints, not SSE/WebSocket. |
 | Accessibility | a `<label for>` on every control (test 09); real `<button>`s; tables with `<th scope="col">`; `aria-current` on the active nav item; `aria-live` message area; confirm() before every delete; visible focus outline. |
 | Layout | sidebar layout on desktop; below 760 px the nav becomes a top bar. Wide tables scroll inside their card, never the whole page. |
 
@@ -98,7 +97,7 @@ Every endpoint the UI uses already existed in Phase 7. None was added.
 - Alert list capped at 50; history at 50 or 100 ticks; no paging.
 - The exchange filter lists BSE, but the seed data has no BSE
   instruments, so that filter shows the empty state.
-- No DB Inspector view (latest 10 ticks / events). It is in the project
-  scope but was not in the Phase 8 brief.
+- No DB Inspector view (latest 10 ticks / events); use
+  `sql/08_inspect_live.sql` instead.
 - Only Chrome was used for testing (headless Chrome 153). Only standard
   features are used (fetch, template literals, SVG, CSS grid/flex).

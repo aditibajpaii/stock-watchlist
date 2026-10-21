@@ -1,4 +1,4 @@
-"""Phase 7 API tests - FastAPI TestClient against REAL PostgreSQL.
+"""API tests - FastAPI TestClient against REAL PostgreSQL.
 
 Every test gets a fresh throwaway database cloned from a template built
 with the production scripts sql/00, 01, 03, 06. Nothing is mocked; the

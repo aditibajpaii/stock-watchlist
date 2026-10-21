@@ -1,4 +1,4 @@
-"""Phase 6 tests for the performance index ix_price_ticks_instrument_time.
+"""Tests for the performance index ix_price_ticks_instrument_time.
 
 Two groups:
   * LiveIndexDefinitionTests - READ-ONLY checks on the dev database
@@ -96,7 +96,7 @@ class LiveIndexDefinitionTests(unittest.TestCase):
         self.assertEqual(self.index[5], [0, 3, 3])
         self.assertEqual(self.index[6], EXPECTED_DEF)
 
-    def test_05_only_approved_non_constraint_index(self):
+    def test_05_only_expected_non_constraint_index(self):
         extra = self.conn.execute("""
             SELECT i.indexrelid::regclass::text FROM pg_index i
             WHERE i.indrelid::regclass::text = ANY(%s)
@@ -242,19 +242,19 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(psql_file(TEST_DB, "verify_spec.sql").returncode, 0)
         admin_conn = psycopg.connect(dbname=TEST_DB, autocommit=True)
         try:
-            admin_conn.execute("CREATE INDEX ix_unapproved ON price_ticks (price)")
+            admin_conn.execute("CREATE INDEX ix_unexpected ON price_ticks (price)")
             extra = psql_file(TEST_DB, "verify_spec.sql")
             self.assertNotEqual(extra.returncode, 0)
-            self.assertIn("ix_unapproved", extra.stdout)
+            self.assertIn("ix_unexpected", extra.stdout)
             self.assertIn("EXTRA in live DB", extra.stdout)
-            admin_conn.execute("DROP INDEX ix_unapproved")
+            admin_conn.execute("DROP INDEX ix_unexpected")
 
             admin_conn.execute(f"DROP INDEX {INDEX}")
             missing = psql_file(TEST_DB, "verify_spec.sql")
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn("MISSING in live DB", missing.stdout)
         finally:
-            admin_conn.execute("DROP INDEX IF EXISTS ix_unapproved")
+            admin_conn.execute("DROP INDEX IF EXISTS ix_unexpected")
             admin_conn.close()
             psql_file(TEST_DB, "06_indexes.sql")
         self.assertEqual(psql_file(TEST_DB, "verify_spec.sql").returncode, 0)

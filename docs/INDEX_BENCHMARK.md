@@ -1,4 +1,4 @@
-# Index Benchmark (Phase 6) — study notes, not report text
+# Index Benchmark
 
 All numbers come from one run of `tests/benchmark_indexes.py` on 2026-09-25.
 The raw evidence is in `docs/benchmark_results/`:

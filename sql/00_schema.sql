@@ -1,15 +1,3 @@
--- =====================================================================
--- 00_schema.sql
--- Real-Time Stock Market Watchlist & Alert System
--- BCSE302P Database Systems Lab
---
--- Base schema: 7 tables, constraints, referential actions.
--- No functions, triggers or secondary indexes here (later phases).
---
--- Run:  psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql
--- Re-runnable: drops the tables first (DEVELOPMENT ONLY - destroys data).
--- =====================================================================
-
 BEGIN;
 
 DROP TABLE IF EXISTS alert_events    CASCADE;
