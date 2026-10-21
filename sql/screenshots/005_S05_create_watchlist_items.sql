@@ -1,6 +1,3 @@
-\echo '========================================================================'
-\echo ' S05 | CREATE TABLE watchlist_items (statement copied from sql/00_schema.sql)'
-\echo '========================================================================'
 CREATE TABLE watchlist_items (
     watchlist_id   BIGINT      NOT NULL,
     instrument_id  BIGINT      NOT NULL,

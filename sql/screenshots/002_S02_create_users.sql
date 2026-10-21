@@ -1,6 +1,3 @@
-\echo '========================================================================'
-\echo ' S02 | CREATE TABLE users (statement copied from sql/00_schema.sql)'
-\echo '========================================================================'
 CREATE TABLE users (
     user_id     BIGINT GENERATED ALWAYS AS IDENTITY,
     username    TEXT        NOT NULL,

@@ -1,6 +1,3 @@
-\echo '========================================================================'
-\echo ' CN02 | CHECK constraints reject invalid values'
-\echo '========================================================================'
 SELECT * FROM ingest_tick('NSE', 'TCS', now(), -5, NULL, 'MANUAL', 'manual:negative-price');
 SELECT * FROM ingest_tick('NSE', 'TCS', now(), 3500, -1, 'MANUAL', 'manual:negative-volume');
 INSERT INTO alert_rules (user_id, instrument_id, direction, threshold)
