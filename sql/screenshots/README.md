@@ -28,7 +28,7 @@ Retake some: `... -Only "0[5-6]*"`. Steps 111–113 need the benchmark DB
 | 7E Set operations (≥4) | E1 UNION, E2 UNION ALL, E3 INTERSECT, E4 EXCEPT |
 | 7F Functions (≥6) | F1 CASE, F2 COALESCE, F3 NULLIF, F4 date/time, F5 string, F6 numeric |
 | 7G Window (≥2) | G1 ROW_NUMBER/RANK/DENSE_RANK, G2 running total, G3 LAG/LEAD |
-| 8. Complex business queries (≥10) | CQ01–CQ10 (business question is in each image header) |
+| 8. Complex business queries (≥10) | CQ01–CQ10 |
 | 8. Views (2–3) | V1 4-table join, V2 aggregated, V3 row-restricting security view, V4 updatability |
 | 8. Stored procedures (≥2) | P1 list, P2 sp_create_watchlist, P3 sp_set_rule_active |
 | 8. User-defined functions (≥2) | U1 fn_latest_price, U2 fn_price_change_pct |

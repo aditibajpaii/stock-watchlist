@@ -102,7 +102,7 @@ BEGIN
     ORDER BY t.observed_at, t.tick_id LIMIT 1;
 
     IF v_first IS NULL THEN
-        RETURN NULL;                       -- no ticks yet
+        RETURN NULL;
     END IF;
 
     v_last := reporting.fn_latest_price(p_instrument_id);

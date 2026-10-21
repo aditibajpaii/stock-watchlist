@@ -1,6 +1,3 @@
-\echo '========================================================================'
-\echo ' S04 | CREATE TABLE watchlists (statement copied from sql/00_schema.sql)'
-\echo '========================================================================'
 CREATE TABLE watchlists (
     watchlist_id  BIGINT GENERATED ALWAYS AS IDENTITY,
     user_id       BIGINT      NOT NULL,

@@ -1,6 +1,3 @@
-\echo '========================================================================'
-\echo ' S06 | CREATE TABLE price_ticks (statement copied from sql/00_schema.sql)'
-\echo '========================================================================'
 CREATE TABLE price_ticks (
     tick_id          BIGINT GENERATED ALWAYS AS IDENTITY,
     instrument_id    BIGINT         NOT NULL,

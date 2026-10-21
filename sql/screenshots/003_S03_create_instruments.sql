@@ -1,6 +1,3 @@
-\echo '========================================================================'
-\echo ' S03 | CREATE TABLE instruments (statement copied from sql/00_schema.sql)'
-\echo '========================================================================'
 CREATE TABLE instruments (
     instrument_id   BIGINT GENERATED ALWAYS AS IDENTITY,
     exchange        TEXT    NOT NULL,

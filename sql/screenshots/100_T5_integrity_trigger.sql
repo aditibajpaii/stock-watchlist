@@ -1,7 +1,3 @@
-\echo '========================================================================'
-\echo ' T5 | BEFORE INSERT trigger trg_alert_events_check_instrument'
-\echo '      rejects an alert whose rule and tick belong to DIFFERENT instruments'
-\echo '========================================================================'
-\sf check_alert_event_instrument
-INSERT INTO alert_events (rule_id, tick_id)
-VALUES (1, (SELECT tick_id FROM price_ticks WHERE instrument_id = 6 ORDER BY tick_id LIMIT 1));
+SELECT rule_id, instrument_id FROM alert_rules WHERE rule_id = 1;
+SELECT tick_id, instrument_id FROM price_ticks WHERE tick_id = 3;
+INSERT INTO alert_events (rule_id, tick_id) VALUES (1, 3);

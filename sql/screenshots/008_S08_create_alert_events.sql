@@ -1,6 +1,3 @@
-\echo '========================================================================'
-\echo ' S08 | CREATE TABLE alert_events (statement copied from sql/00_schema.sql)'
-\echo '========================================================================'
 CREATE TABLE alert_events (
     event_id  BIGINT GENERATED ALWAYS AS IDENTITY,
     rule_id   BIGINT      NOT NULL,
