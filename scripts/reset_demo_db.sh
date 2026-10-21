@@ -9,13 +9,15 @@
 #   sql/01_seed.sql              3 users, 7 instruments, 5 watchlists, 11 items, 6 rules
 #   sql/03_functions_triggers.sql  ingest_tick() and the 2 triggers
 #   sql/06_indexes.sql           ix_price_ticks_instrument_time
+#   sql/09_review2_objects.sql   Review 2 add-ons in schema reporting (views, procedures,
+#                                functions, cursors, roles/grants)
 # Then prints the row counts and exits non-zero unless they match the clean
 # state. It only touches the one database named below: it never creates or
 # drops databases.
 #
 # Same as the direct command:
 #   psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql \
-#        -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
+#        -f sql/03_functions_triggers.sql -f sql/06_indexes.sql -f sql/09_review2_objects.sql
 
 set -euo pipefail
 
@@ -31,7 +33,7 @@ echo "  (drops and rebuilds its tables; all replay/manual/live ticks and alerts 
 
 # client_min_messages=warning hides the harmless "does not exist, skipping" notices
 PGOPTIONS="-c client_min_messages=warning" "$PSQL" -X -q -d "$DB" -v ON_ERROR_STOP=1 \
-    -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
+    -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql -f sql/06_indexes.sql -f sql/09_review2_objects.sql
 
 echo
 "$PSQL" -X -d "$DB" -v ON_ERROR_STOP=1 -c "

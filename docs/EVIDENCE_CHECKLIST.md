@@ -1,0 +1,747 @@
+# Evidence Checklist
+
+> **Review 2 (Windows):** 113 real psql console screenshots covering every
+> section of "Project Template - review 2.docx" are produced by
+> `scripts/take_screenshots.ps1` into `docs/screenshots/`. Which image
+> goes in which template section: `sql/screenshots/README.md`.
+
+Screenshots for the official report. Take them in a terminal with a
+readable font and a window wide enough that psql output does not wrap.
+**Start with the FINAL MUST-HAVE list below.** Everything after it is
+optional extra evidence, organised by phase. Never fake a screenshot:
+each one must come from your own run.
+
+## FINAL MUST-HAVE SCREENSHOTS (15 items)
+
+Before starting: `bash scripts/reset_demo_db.sh` (clean database), and
+`uvicorn app.main:app --reload` in another terminal for the web and API
+items. Details for each ID are in the section named in the last column.
+
+| # | ID | What it shows | Command / where | Details |
+|---|---|---|---|---|
+| 1 | **01_er-diagram.png** | ER diagram (3 marks) | docs/ER_DIAGRAM.md mermaid block → mermaid.live → export | §5 |
+| 2 | **05a–11a / 05b–11b** | CREATE TABLE + `\d <table>` for each of the 7 tables: 14 small images (the report template asks for both per table) | editor on sql/00_schema.sql; `psql -d stock_watchlist -c '\d users'` … | §6.2 |
+| 3 | **13_fk-on-delete.png** | all PK/FK/UNIQUE/CHECK names; the 8 FKs with CASCADE/RESTRICT | `psql -d stock_watchlist -f sql/inspect_schema.sql` | §6.3 |
+| 4 | **17_schema-tests.png** | constraints really reject bad data: 51/51 PASS | `psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/02_schema_tests.sql` | §6.5 |
+| 5 | **25_fd-counterexamples.png** | normalization: rejected FDs really are false (symbol not a key; exchange ↛ quote_currency) | rolled-back SQL block | Normal forms |
+| 6 | **30_functions-list.png + 33b_trigger-list.png** | stored function + triggers: `\df` (ingest_tick, evaluate_price_alerts, check_alert_event_instrument) and the 2 triggers | `psql -d stock_watchlist -c '\df'`; trigger query in Phase 4 → Definitions | Phase 4 |
+| 7 | **42_concurrency-script.png** | transactions/locking: the lock prevents a double alert (the control run without the lock shows 2) | `bash tests/concurrency_test.sh` | Phase 4 |
+| 8 | **80_ui-dashboard.png** | web app over the database: counts, recent alerts, watchlists | browser, after the replay (item 11) | Phase 8 |
+| 9 | **81_ui-watchlists.png** | watchlists with latest prices (LEFT JOIN LATERAL) | browser → Watchlists | Phase 8 |
+| 10 | **83_ui-alert-rules.png** | ABOVE/BELOW rules, ACTIVE/DISABLED | browser → Alert Rules | Phase 8 |
+| 11 | **51_replay-run.png** | deterministic alert firing: 30 inserted, 8 ALERT lines | `python -m app.replay data/replay_prices.csv --delay-ms 300 --run-id demo1` | Phase 5 |
+| 12 | **87_ui-alert-history.png** | durable alert history (alert_events + joins) | browser → Alert History | Phase 8 |
+| 13 | **70_swagger.png** | REST API: 18 endpoints | http://127.0.0.1:8000/docs (needs internet for the page design) | Phase 7 |
+| 14 | **62_explain-before.png + 65_explain-after.png** | index + EXPLAIN ANALYZE: latest-50 Sort + Bitmap 9.461 ms → Index Scan 0.020 ms | benchmark run, or the saved plans in docs/benchmark_results/plans_baseline.txt and plans_btree.txt | Phase 6 |
+| 15 | **110_full-regression.png** | every suite passing | `bash scripts/run_all_tests.sh` (ends `ALL SUITES PASSED`) | Phase 9 |
+
+**Optional (take only if time allows):**
+- **52_replay-duplicate.png**: the same run_id again → 0 inserted, 30
+  duplicate (idempotency).
+- **85_ui-manual-tick.png**: manual crossing from the Demo view.
+- **108_db-inspector.png**: `psql -d stock_watchlist -f sql/08_inspect_live.sql`.
+- **23_schema-matches-spec.png**: live schema = approved spec.
+- **101_live-feed-running.png** and **102_binance-ticks-sql.png**: the
+  live Binance feed (internet; see Phase 9).
+- **68_brin.png**: B-tree vs BRIN.
+- **46_after-commit.png**: two-terminal lock demonstration.
+
+After the screenshots: `bash scripts/reset_demo_db.sh`.
+
+## DBMS topic → evidence map
+
+| Topic | Evidence (screenshot IDs) | Source of truth |
+|---|---|---|
+| ER design, relationships, cardinality | 01, 01b, 01c, 16 | docs/ER_DIAGRAM.md |
+| Tables | 03, 04, 05a–11a, 05b–11b | sql/00_schema.sql |
+| Primary keys (incl. composite) | 05b–11b, 24 | FACT_SHEET "Tables" |
+| Foreign keys + ON DELETE | 13, 20, 21, 22 | FACT_SHEET "Foreign keys" |
+| UNIQUE constraints | 12, 18, 37 | sql/02_schema_tests.sql group A |
+| CHECK constraints | 12, 19 | group B |
+| Normalization (1NF–BCNF, FDs, candidate keys) | 23, 24, 25, 26, 27 (FD table from notes), 28 | docs/NORMALIZATION_NOTES.md |
+| Stored function | 30, 31 | sql/03_functions_triggers.sql |
+| Triggers | 32, 33, 33b, 34–39 | sql/04_alert_tests.sql (50) |
+| Transactions / rollback | 40, 46, 55 | VIVA note 14 |
+| Concurrency / row locking | 42, 44–46 | tests/concurrency_test.sh (17) |
+| Indexes | 63, 64, 66, 67 | sql/06_indexes.sql |
+| EXPLAIN ANALYZE, before/after, BRIN | 62, 65, 68 | docs/INDEX_BENCHMARK.md |
+| Joins (incl. LATERAL) | 16, 28, 72, 76, 87 | app/main.py queries |
+| CRUD | 74 (create), 77 (update rejected for immutable fields), 82–84 (UI create/duplicate/delete) | docs/API.md |
+| Database-backed application | 80–89, 70, 51, 101 | docs/FRONTEND.md, docs/DEMO_GUIDE.md |
+
+## One-time setup (every new terminal)
+
+```sh
+export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
+cd "/Users/aditi/dbms project"
+```
+
+Optional: nicer psql output for screenshots
+
+```sh
+psql -d stock_watchlist
+\pset border 2
+\pset null '(null)'
+```
+
+Suggested filename pattern: `NN_short-name.png` in `docs/screenshots/`.
+
+---
+
+## Section 5 – ER Diagram (3 marks)
+
+Source: `docs/ER_DIAGRAM.md` (verified against the live catalog).
+
+- [ ] **01_er-diagram.png** — exported image of the Mermaid diagram.
+      Paste the ```mermaid block into https://mermaid.live, then use
+      Actions → PNG. Also export an SVG, which stays sharp when printed.
+      It must show all 7 entities, PK/FK/UK markers, and 8 relationship
+      lines with crow's-foot cardinality.
+- [ ] **01b_er-relationships.png** — relationships proven from the
+      catalog, not drawn by hand:
+      `psql -d stock_watchlist -f sql/verify_spec.sql`
+      Capture section "4. Relationships derived from foreign keys"
+      (8 rows: parent, child, FK, 1 : 0..N, participation, ON DELETE).
+- [ ] **01c_fk-list.png** — the "Foreign keys and ON DELETE" section of
+      `sql/inspect_schema.sql`, as a second source for the same 8 edges.
+
+For the report team:
+- The Mermaid diagram is the verified reference. If you redraw it in
+  another tool (draw.io, Chen notation), check every line against
+  01b. Do not add relationships without an FK; for example, there is NO
+  direct users–instruments link.
+- The two M:N relationships (watchlists–instruments and
+  alert_rules–price_ticks) are shown through the junction tables
+  watchlist_items and alert_events.
+
+## Section 6 – Tables and Constraints (5 marks)
+
+### 6.1 Database and server
+
+- [ ] **02_pg-version.png** —
+      `psql -d stock_watchlist -c "SELECT version();"`
+- [ ] **03_schema-run.png** — successful creation of all 7 tables:
+      `psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql`
+      (shows `CREATE TABLE` ×7 and `COMMIT`)
+- [ ] **04_table-list.png** — `psql -d stock_watchlist -c '\dt'`
+
+### 6.2 For EACH of the 7 tables (template requires all four items)
+
+Take one screenshot of the CREATE TABLE statement (open
+`sql/00_schema.sql` in the editor and capture that table's block) and one
+of `\d <table>`, which shows columns, types, NOT NULL, defaults, PK,
+UNIQUE, CHECK and FK constraints together.
+
+| Table | CREATE TABLE screenshot | Structure screenshot | Command |
+|---|---|---|---|
+| users | [ ] 05a_create_users.png | [ ] 05b_d_users.png | `\d users` |
+| instruments | [ ] 06a_create_instruments.png | [ ] 06b_d_instruments.png | `\d instruments` |
+| watchlists | [ ] 07a_create_watchlists.png | [ ] 07b_d_watchlists.png | `\d watchlists` |
+| watchlist_items | [ ] 08a_create_watchlist_items.png | [ ] 08b_d_watchlist_items.png | `\d watchlist_items` |
+| price_ticks | [ ] 09a_create_price_ticks.png | [ ] 09b_d_price_ticks.png | `\d price_ticks` |
+| alert_rules | [ ] 10a_create_alert_rules.png | [ ] 10b_d_alert_rules.png | `\d alert_rules` |
+| alert_events | [ ] 11a_create_alert_events.png | [ ] 11b_d_alert_events.png | `\d alert_events` |
+
+### 6.3 Constraint summary (all tables)
+
+- [ ] **12_constraints.png** and **13_fk-on-delete.png** — run:
+      `psql -d stock_watchlist -f sql/inspect_schema.sql`
+      and capture the "Constraints" and "Foreign keys and ON DELETE"
+      sections (36 named constraints; 8 FKs with CASCADE/RESTRICT).
+
+### 6.4 Sample rows
+
+- [ ] **14_seed-run.png** —
+      `psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/01_seed.sql`
+- [ ] **15_sample-rows.png** — in psql:
+      ```sql
+      SELECT * FROM users;
+      SELECT * FROM instruments;
+      SELECT * FROM watchlists;
+      SELECT * FROM alert_rules;
+      ```
+- [ ] **16_watchlist-join.png** — proves the M:N relationship:
+      ```sql
+      SELECT u.username, w.name AS watchlist, i.exchange, i.symbol
+      FROM watchlist_items wi
+      JOIN watchlists  w USING (watchlist_id)
+      JOIN users       u USING (user_id)
+      JOIN instruments i USING (instrument_id)
+      ORDER BY u.username, w.name, i.symbol;
+      ```
+
+### 6.5 Constraints actually working
+
+- [ ] **17_schema-tests.png** — the results table (51 rows, all PASS) and
+      the summary line:
+      `psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/02_schema_tests.sql`
+
+Raw PostgreSQL error messages are more convincing to an examiner. Take
+each of these inside a transaction you roll back, so the seed stays
+unchanged:
+
+```sql
+BEGIN;
+-- 18_err-unique.png  (UNIQUE)
+INSERT INTO users (username, email) VALUES ('arjun', 'x@example.com');
+ROLLBACK;
+
+BEGIN;
+-- 19_err-check.png  (CHECK)
+INSERT INTO price_ticks (instrument_id, observed_at, price, source, source_event_id)
+VALUES (1, now(), -5, 'MANUAL', 'manual:neg');
+ROLLBACK;
+
+BEGIN;
+-- 20_err-fk.png  (FOREIGN KEY)
+INSERT INTO watchlists (user_id, name) VALUES (999, 'Ghost');
+ROLLBACK;
+
+BEGIN;
+-- 21_err-restrict.png  (ON DELETE RESTRICT)
+DELETE FROM instruments WHERE exchange = 'NSE' AND symbol = 'RELIANCE';
+ROLLBACK;
+
+BEGIN;
+-- 22_cascade.png  (ON DELETE CASCADE)
+SELECT count(*) FROM watchlists WHERE user_id = 1;   -- before: 2
+DELETE FROM users WHERE username = 'arjun';
+SELECT count(*) FROM watchlists WHERE user_id = 1;   -- after: 0
+ROLLBACK;
+```
+
+## Normal forms (2 marks)
+
+Source notes: `docs/NORMALIZATION_NOTES.md`. The team writes the report
+text from these.
+
+- [ ] **23_schema-matches-spec.png** — live schema identical to the
+      approved design:
+      `psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/verify_spec.sql`
+      Capture sections 1–3 (empty mismatch tables) and the final NOTICE
+      `LIVE SCHEMA MATCHES docs/PHASE1_SPEC.md`.
+- [ ] **24_composite-keys.png** — the composite keys that 2NF is checked
+      against. In psql:
+      `\d watchlist_items`  (composite PK)
+      `\d alert_rules`      (4-column UNIQUE)
+      `\d price_ticks`      (3-column UNIQUE)
+- [ ] **25_fd-counterexamples.png** — proof that rejected FDs really are
+      false. Run in psql; it rolls back and changes nothing:
+      ```sql
+      BEGIN;
+      INSERT INTO instruments (exchange, symbol, name, quote_currency) VALUES
+        ('BSE','RELIANCE','Reliance Industries Ltd','INR'),
+        ('BINANCE','ETHBTC','Ether / Bitcoin','BTC');
+      SELECT exchange, symbol, quote_currency FROM instruments
+      WHERE symbol IN ('RELIANCE','BTCUSDT','ETHUSDT','ETHBTC')
+      ORDER BY exchange, symbol;
+      SELECT exchange, count(DISTINCT quote_currency) AS currencies
+      FROM instruments GROUP BY exchange;
+      ROLLBACK;
+      ```
+      This shows the symbol repeating across exchanges (symbol is not a
+      key) and BINANCE having 2 currencies (exchange ↛ quote_currency).
+- [ ] **26_timestamp-not-identity.png** — rows A9 and A10 of the
+      schema-test output (screenshot 17), showing identity is the source
+      event, not the timestamp.
+- [ ] **27_fd-table** — not a screenshot. The team builds the per-table
+      FD / candidate key / NF table from NORMALIZATION_NOTES.md §8.
+- [ ] **28_no-duplication-join.png** — any DEMO 1 or DEMO 3 event
+      table from `sql/05_demo_queries.sql` (screenshots 34/36). The
+      event row shows symbol, price and observed_at, all obtained by
+      joining through tick_id; alert_events itself stores only
+      (event_id, rule_id, tick_id, fired_at).
+
+## Marks → evidence map
+
+| Marks | Minimum evidence | Strong extra evidence |
+|---|---|---|
+| ER Diagram (3) | 01 | 01b, 01c |
+| Tables + description + screenshots (5) | 03, 04, 05a–11a (CREATE TABLE ×7), 05b–11b (`\d` ×7) | 02, 12, 13, 14–16, 17, 18–22 |
+| Normal forms (2) | 27 (FD/NF table from notes), 24 | 23, 25, 26, 28 |
+
+## Phase 4 – Ingestion and alert engine (strong extra evidence)
+
+The template has no dedicated marks for triggers. This evidence supports
+"Tables and Constraints" (the database doing the work) and the Review
+Evaluation / viva.
+
+### Definitions
+
+- [ ] **30_functions-list.png** — in psql: `\df`
+      (3 rows: ingest_tick, evaluate_price_alerts, check_alert_event_instrument)
+- [ ] **31_ingest_tick-def.png** — in psql: `\sf ingest_tick`
+      (or open sql/03_functions_triggers.sql, section 3)
+- [ ] **32_alert-trigger-def.png** — in psql: `\sf evaluate_price_alerts`
+- [ ] **33_integrity-trigger-def.png** — in psql:
+      `\sf check_alert_event_instrument`
+- [ ] **33b_trigger-list.png** — in psql:
+      ```sql
+      SELECT tgname, tgrelid::regclass AS on_table, pg_get_triggerdef(oid)
+      FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1;
+      ```
+      or `\d price_ticks` and `\d alert_events` (see the "Triggers:" section)
+
+### Behaviour (one script, fully rolled back, safe to repeat)
+
+`psql -d stock_watchlist -f sql/05_demo_queries.sql`
+
+It picks its market time T0 = 10 min after the latest stored
+RELIANCE/BTCUSDT tick (or now). It works on a clean database and after
+replays, and shows only its own events.
+
+| Screenshot | Section of the output |
+|---|---|
+| [ ] **34_above-alert-fires.png** | DEMO 1 — 2990 then 3005 → one ABOVE event |
+| [ ] **35_no-repeat-while-above.png** | DEMO 2 — 3010, 3020 → still one event |
+| [ ] **36_cooldown.png** | DEMO 3 — re-cross after 19 s suppressed; re-cross after 329 s fires (2 events) |
+| [ ] **37_duplicate-input.png** | DEMO 4 — status DUPLICATE, 1 tick with that id, demo events still 2 |
+| [ ] **38_late-tick.png** | DEMO 5 — the T0−60 s tick is stored (first row by time), no BELOW event |
+| [ ] **39_integrity-error.png** | DEMO 6 — ERROR "rule 1 is for instrument 1, but tick … is for instrument 6" |
+| [ ] **40_rollback.png** | DEMO 7 — 10 ticks / 2 events added inside, 0 / 0 after ROLLBACK |
+
+### Automated test results
+
+- [ ] **41_alert-tests.png** —
+      `psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/04_alert_tests.sql`
+      (results table + "50 | 0 | 50")
+- [ ] **42_concurrency-script.png** — `bash tests/concurrency_test.sh`
+      (4 scenarios, "ALL CONCURRENCY CHECKS PASSED"). It uses its own
+      throwaway DB and does not touch stock_watchlist.
+- [ ] **43_verify-spec-phase4.png** —
+      `psql -d stock_watchlist -f sql/verify_spec.sql`, section 3b and the
+      final NOTICE
+
+### Two-terminal lock demonstration (manual, for screenshots 44–46)
+
+Uses a separate demo database, so the dev seed data is never changed.
+
+**SETUP (any terminal, once):**
+```sh
+export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
+cd "/Users/aditi/dbms project"
+dropdb --if-exists stock_watchlist_demo
+createdb stock_watchlist_demo
+psql -q -d stock_watchlist_demo -v ON_ERROR_STOP=1 \
+     -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
+psql -d stock_watchlist_demo -c "SELECT * FROM ingest_tick('NSE','RELIANCE','2026-01-05 09:15:00+05:30',2990,100,'MANUAL','demo:base');"
+```
+
+**TERMINAL A**
+```sh
+psql -d stock_watchlist_demo
+```
+```sql
+\set PROMPT1 'TERMINAL-A %# '
+BEGIN;
+SELECT * FROM ingest_tick('NSE','RELIANCE','2026-01-05 09:15:01+05:30',3005,100,'MANUAL','demo:A');
+-- returns INSERTED. Do NOT commit yet; the RELIANCE row lock is held.
+```
+
+**TERMINAL B**
+```sh
+psql -d stock_watchlist_demo
+```
+```sql
+\set PROMPT1 'TERMINAL-B %# '
+BEGIN;
+SELECT * FROM ingest_tick('NSE','RELIANCE','2026-01-05 09:15:02+05:30',3010,100,'MANUAL','demo:B');
+-- HANGS here: B is waiting for A's lock.
+```
+- [ ] **44_terminal-B-waiting.png** — both terminals side by side, B hanging
+
+**TERMINAL C (optional observer, while B hangs)**
+```sh
+psql -d stock_watchlist_demo
+```
+```sql
+SELECT pid, state, wait_event_type, wait_event, pg_blocking_pids(pid) AS blocked_by,
+       left(query, 60) AS query
+FROM pg_stat_activity
+WHERE datname = 'stock_watchlist_demo' AND pid <> pg_backend_pid();
+LISTEN alert_events;
+```
+- [ ] **45_blocking-pids.png** — B shows wait_event_type = Lock,
+      wait_event = transactionid, blocked_by = {A's pid}
+
+**TERMINAL A**
+```sql
+COMMIT;
+```
+**TERMINAL B** — the SELECT now returns INSERTED immediately. Then:
+```sql
+COMMIT;
+SELECT e.event_id, t.source_event_id, t.price, t.observed_at
+FROM alert_events e JOIN price_ticks t USING (tick_id) ORDER BY e.event_id;
+-- exactly ONE event, on demo:A. B saw A's 3005 as its previous price.
+```
+**TERMINAL C** — type `SELECT 1;` and psql prints
+`Asynchronous notification "alert_events" with payload "1" received …`
+(only A's committed event).
+- [ ] **46_after-commit.png** — B's result, the single event and C's
+      notification
+
+**CLEANUP**, after quitting all three with `\q`:
+```sh
+dropdb stock_watchlist_demo
+```
+
+## Phase 5 – Offline replay (Python → ingest_tick → alerts)
+
+### Setup (each new terminal)
+```sh
+export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
+cd "/Users/aditi/dbms project"
+source .venv/bin/activate
+```
+First time only (already done on this machine):
+```sh
+python3.13 -m venv .venv
+pip install -r requirements.txt
+```
+
+### Clean demo database (recommended before a classroom demo)
+
+This resets stock_watchlist to seed data (plus functions, triggers and
+the index), destroying replay and demo ticks, so a replay produces
+exactly 8 alerts:
+```sh
+bash scripts/reset_demo_db.sh
+```
+(= `psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql -f sql/03_functions_triggers.sql -f sql/06_indexes.sql`)
+
+### Screenshots
+
+- [ ] **50_replay-dry-run.png** —
+      `python -m app.replay data/replay_prices.csv --dry-run --run-id demo1`
+      (30 "would send" lines with observed_at and source_event_id; no DB
+      changes)
+- [ ] **51_replay-run.png** — the live-looking run, prices arriving one by
+      one:
+      `python -m app.replay data/replay_prices.csv --delay-ms 300 --run-id demo1`
+      Capture the ALERT lines (8) and the summary (Inserted 30, Alerts 8).
+- [ ] **52_replay-duplicate.png** — the same run id again:
+      `python -m app.replay data/replay_prices.csv --run-id demo1`
+      ("Retrying run demo1", 30 × DUPLICATE, Inserted 0)
+- [ ] **53_replay-late-guard.png** — a new run immediately afterwards:
+      `python -m app.replay data/replay_prices.csv --run-id demo2`
+      (refused, with the LATE explanation, exit 2). Optional follow-up:
+      add `--start-after-latest` (30 inserted, 7 alerts).
+- [ ] **54_replay-db-view.png** — in psql, after the run:
+      ```sql
+      -- latest 10 ticks
+      SELECT t.tick_id, i.exchange, i.symbol, t.price, t.volume,
+             t.observed_at, t.source, t.source_event_id
+      FROM price_ticks t JOIN instruments i USING (instrument_id)
+      ORDER BY t.observed_at DESC, t.tick_id DESC LIMIT 10;
+
+      -- alert events created by the replay, with the rule that caused them
+      SELECT e.event_id, u.username, i.symbol, r.direction, r.threshold,
+             r.cooldown_seconds, t.price, t.observed_at, t.source_event_id
+      FROM alert_events e
+      JOIN alert_rules r USING (rule_id)
+      JOIN users u       USING (user_id)
+      JOIN price_ticks t USING (tick_id)
+      JOIN instruments i ON i.instrument_id = t.instrument_id
+      WHERE t.source = 'REPLAY'
+      ORDER BY t.observed_at, e.event_id;
+
+      -- latest price per instrument
+      SELECT DISTINCT ON (i.symbol) i.exchange, i.symbol, t.price, t.observed_at
+      FROM price_ticks t JOIN instruments i USING (instrument_id)
+      ORDER BY i.symbol, t.observed_at DESC, t.tick_id DESC;
+      ```
+- [ ] **55_replay-error.png** — a clear failure for an unknown instrument:
+      ```sh
+      printf 'offset_seconds,exchange,symbol,price,volume\n0,NSE,NOSUCH,100,1\n' > /tmp/bad.csv
+      python -m app.replay /tmp/bad.csv; echo "exit=$?"
+      ```
+      Shows `ERROR [SW001] ingest_tick: unknown instrument NSE:NOSUCH` and
+      `exit=2`.
+- [ ] **56_replay-tests.png** — `python -m unittest tests.test_replay -v`
+      (18 tests, OK). They use throwaway databases; stock_watchlist is not
+      touched.
+
+## Phase 6 – Index benchmark
+
+Real measured numbers are in docs/INDEX_BENCHMARK.md. Screenshots must
+come from your own runs; timings will differ slightly from the
+documented ones.
+
+### Setup
+```sh
+export PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH"
+cd "/Users/aditi/dbms project"
+source .venv/bin/activate
+python tests/benchmark_indexes.py        # ~1 min; builds stock_watchlist_benchmark
+```
+
+### Screenshots
+
+- [ ] **60_benchmark-run.png** — terminal output of
+      `python tests/benchmark_indexes.py`: the three stage tables (median
+      ms, buffers, plan nodes), plus the "Identical results" line.
+      Evidence for items 6 and 7 of your list (before/after timing,
+      buffer/plan difference).
+- [ ] **61_row-count.png** — large benchmark row count:
+      `psql -d stock_watchlist_benchmark -c "SELECT count(*), count(DISTINCT instrument_id) FROM price_ticks;"`
+      (500000, 20)
+- [ ] **62_explain-before.png** and **65_explain-after.png** — in one run:
+      `psql -d stock_watchlist_benchmark -f sql/07_benchmark_queries.sql`
+      - "WITHOUT" section (index dropped inside a rolled-back transaction):
+        query A shows Sort + Bitmap Heap Scan on uq_price_ticks_source_event,
+        Buffers ≈ 6,371, Execution Time ≈ 9–17 ms
+      - "WITH" section: query A shows Index Scan using
+        ix_price_ticks_instrument_time, no Sort, Buffers ≈ 16,
+        Execution Time ≈ 0.02 ms
+      - The script refuses to run on stock_watchlist.
+- [ ] **63_create-index.png** — CREATE INDEX with timing, on the benchmark
+      DB:
+      ```sh
+      psql -d stock_watchlist_benchmark
+      ```
+      ```sql
+      DROP INDEX ix_price_ticks_instrument_time;
+      \timing on
+      \i sql/06_indexes.sql
+      ```
+      For the real project DB, the same file:
+      `psql -d stock_watchlist -f sql/06_indexes.sql` prints
+      `NOTICE: relation … already exists, skipping` (IF NOT EXISTS) once
+      installed.
+- [ ] **64_d-price_ticks.png** — `psql -d stock_watchlist -c '\d price_ticks'`
+      ("Indexes:" shows ix_price_ticks_instrument_time
+      btree (instrument_id, observed_at DESC, tick_id DESC))
+- [ ] **66_sizes.png** — index and table sizes:
+      ```sql
+      SELECT relname, pg_size_pretty(pg_relation_size(oid)) AS size
+      FROM pg_class
+      WHERE oid = 'price_ticks'::regclass
+         OR oid IN (SELECT indexrelid FROM pg_index WHERE indrelid = 'price_ticks'::regclass)
+      ORDER BY pg_relation_size(oid) DESC;
+      SELECT pg_size_pretty(pg_total_relation_size('price_ticks')) AS total;
+      ```
+      Run it on stock_watchlist_benchmark (48 MB table, 19 MB index,
+      120 MB total).
+- [ ] **67_previous-tick-index.png** — query C in the WITH section of
+      07: `Index Cond: ((instrument_id = …) AND (ROW(observed_at, tick_id)
+      < ROW(…)))`, Buffers ≈ 4. For the trigger's own plan, open
+      docs/benchmark_results/trigger_auto_explain_btree.txt and capture the
+      "EXISTS" and "SELECT t.price" blocks. The _baseline file shows
+      `Seq Scan on price_ticks … Rows Removed by Filter: 500001`.
+- [ ] **68_brin.png** (optional) — the BRIN stage table from 60, or
+      plans_brin.txt query B (BitmapAnd using ix_bench_brin_observed_at)
+- [ ] **69_regression.png** — all suites passing:
+      ```sh
+      psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/02_schema_tests.sql | tail -5
+      psql -q -d stock_watchlist -f sql/verify_spec.sql 2>&1 | tail -2
+      psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/04_alert_tests.sql | tail -5
+      bash tests/concurrency_test.sh | tail -1
+      python -m unittest tests.test_replay tests.test_indexes
+      ```
+      (51/51, MATCHES, 50/50, ALL CONCURRENCY CHECKS PASSED, 33 tests OK)
+
+### Cleanup when finished with screenshots
+```sh
+dropdb stock_watchlist_benchmark
+```
+
+## Phase 7 – FastAPI backend
+
+### Setup
+```sh
+cd "/Users/aditi/dbms project"
+source .venv/bin/activate
+uvicorn app.main:app --reload            # leave running in TERMINAL 1
+```
+Use TERMINAL 2 for the curl commands below. The Swagger page needs
+internet in the browser, because it loads its UI from cdn.jsdelivr.net.
+
+Tip for a demo with alerts: run a replay first
+(`python -m app.replay data/replay_prices.csv`), so latest prices and
+alert history are not empty.
+
+### Screenshots
+
+- [ ] **70_swagger.png** — browser: http://127.0.0.1:8000/docs (all
+      endpoint groups visible)
+- [ ] **71_health.png** — `curl -s http://127.0.0.1:8000/health`
+      (`{"status":"ok","database":"connected"}`)
+- [ ] **72_watchlists.png** — `curl -s http://127.0.0.1:8000/users/1/watchlists | python -m json.tool`
+      (watchlists with items and latest_price)
+- [ ] **73_latest-price.png** — `curl -s http://127.0.0.1:8000/instruments/1/latest | python -m json.tool`
+- [ ] **74_create-rule.png** — in Swagger ("Try it out") or:
+      ```sh
+      curl -s -X POST http://127.0.0.1:8000/users/2/alert-rules \
+        -H "Content-Type: application/json" \
+        -d '{"instrument_id":1,"direction":"ABOVE","threshold":3050,"cooldown_seconds":60}'
+      ```
+      Run it a second time to capture the 409 with
+      `"constraint":"uq_alert_rules_definition"`.
+- [ ] **75_ingest-crossing.png** — two manual ticks through ingest_tick,
+      stamped with the current time (macOS `date`):
+      ```sh
+      T1=$(date -u +%Y-%m-%dT%H:%M:%SZ); T2=$(date -u -v+5S +%Y-%m-%dT%H:%M:%SZ)
+      curl -s -X POST http://127.0.0.1:8000/ticks/ingest -H "Content-Type: application/json" \
+        -d "{\"exchange\":\"NSE\",\"symbol\":\"RELIANCE\",\"observed_at\":\"$T1\",\"price\":3000,\"source_event_id\":\"viva-001\"}"
+      curl -s -X POST http://127.0.0.1:8000/ticks/ingest -H "Content-Type: application/json" \
+        -d "{\"exchange\":\"NSE\",\"symbol\":\"RELIANCE\",\"observed_at\":\"$T2\",\"price\":3060.5,\"source_event_id\":\"viva-002\"}"
+      ```
+      Resend the second command to show `DUPLICATE`.
+      - Needs no RELIANCE tick newer than now. Right after a replay, whose
+        ticks run up to 7 min 40 s into the future, these ticks would be
+        late and fire nothing: wait, or reset the DB first.
+      - Do NOT use far-future timestamps. They would make later replays
+        refuse to start (late-start guard).
+- [ ] **76_alert-history.png** — `curl -s http://127.0.0.1:8000/users/2/alerts | python -m json.tool`
+      (the joined alert: symbol, threshold, price, observed_at, fired_at)
+- [ ] **77_immutable-rule.png** —
+      `curl -s -X PATCH http://127.0.0.1:8000/alert-rules/1 -H "Content-Type: application/json" -d '{"threshold":1}'`
+      (422 extra_forbidden)
+- [ ] **78_api-tests.png** — `python -m unittest tests.test_api -v`
+      (32 tests OK; uses throwaway databases)
+
+⚠ Screenshots 74–75 write to stock_watchlist. To reset the dev DB to
+seed + index afterwards:
+```sh
+psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql \
+     -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
+```
+
+## Phase 8 – Web frontend
+
+### Setup
+```sh
+cd "/Users/aditi/dbms project"
+source .venv/bin/activate
+uvicorn app.main:app --reload            # TERMINAL 1, leave running
+```
+Open http://127.0.0.1:8000/ in the browser. It needs no internet access.
+
+- **Recommended:** reset the dev DB first (the command at the end of
+  Phase 7) so the demo starts from seed data.
+- **Optional, for alerts to show on screen:** in TERMINAL 2, run
+  `python -m app.replay data/replay_prices.csv --delay-ms 300`, then
+  press **Refresh**.
+- **Or** make a crossing in the Demo view: RELIANCE 3000, then 3060.50,
+  with a rule RELIANCE ABOVE 3050.
+- Manual ticks use the current time. Right after a replay (whose ticks
+  run up to 7 min 40 s ahead), a manual tick is *late*: it is stored,
+  but fires no alert.
+
+### Screenshots
+
+- [ ] **80_ui-dashboard.png** — Dashboard: 4 stat cards, Recent alerts,
+      Watchlist overview, green "API + database connected" badge, demo
+      user selector
+- [ ] **81_ui-watchlists.png** — Watchlists: each list with latest price
+      and observed time per instrument
+- [ ] **82_ui-duplicate-item.png** — add an instrument that is already in
+      the list → red message "RELIANCE is already in this watchlist."
+      (PK pk_watchlist_items, mapped by the API)
+- [ ] **83_ui-alert-rules.png** — Alert Rules: ABOVE/BELOW badges, ACTIVE
+      and DISABLED rules (disable one first), cooldown inputs
+- [ ] **84_ui-delete-rule-warning.png** — Delete on a rule → the
+      confirmation text "Deleting this rule also removes its alert
+      history" (press Cancel)
+- [ ] **85_ui-manual-tick.png** — Demo: tick result INSERTED with
+      tick_id and "Alerts recorded for … by this tick"
+- [ ] **86_ui-duplicate-tick.png** — "Resend last tick" → DUPLICATE,
+      tick_id "– (nothing stored)"
+- [ ] **87_ui-alert-history.png** — Alert History: fired time, symbol,
+      direction, threshold, triggered price, observed time
+- [ ] **88_ui-price-history.png** — Instruments → "Latest price &
+      history" on an instrument with ticks: latest card, SVG chart, table
+- [ ] **89_ui-no-data.png** — an instrument with no ticks → "No price
+      data yet" (a normal state, not an error)
+- [ ] **90_ui-db-unavailable.png** _(optional)_ — `brew services stop
+      postgresql@18`, press Refresh → "Database unavailable" badge and
+      message; then `brew services start postgresql@18`
+- [ ] **91_ui-devtools-network.png** _(optional)_ — browser DevTools →
+      Network: requests go to /users/…, /instruments, /ticks/ingest on
+      127.0.0.1:8000 only (no CDN, nothing to port 5432)
+- [ ] **92_frontend-tests.png** —
+      `python -m unittest tests.test_frontend -v` (13 tests OK in Phase 8; 14 after Phase 9)
+- [ ] **93_narrow-window.png** _(optional)_ — the page in a narrow
+      window: navigation moves to a top bar
+
+⚠ Screenshots 82–86 write to stock_watchlist. Reset it afterwards with
+the Phase 7 command above.
+
+## Phase 9 – Optional Binance live feed
+
+Needs internet access to Binance. If it isn't available, skip the live
+screenshots: the replay screenshots (Phase 5) show the same ingestion and
+alert path.
+
+### Setup (3 terminals, project root, `source .venv/bin/activate` in each)
+```sh
+# TERMINAL 1: clean classroom database (drops and rebuilds all tables)
+psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql \
+     -f sql/03_functions_triggers.sql -f sql/06_indexes.sql
+# TERMINAL 1: then the web app
+uvicorn app.main:app --reload
+# TERMINAL 2: the live feed (below)      TERMINAL 3: psql / curl
+```
+Do NOT run a replay before the live feed. Its ticks are stamped up to
+7 min 40 s into the future, and the live feed refuses to start (that
+refusal is screenshot 105).
+
+### Screenshots
+
+- [ ] **100_clean-counts.png** — `psql -d stock_watchlist -f sql/08_inspect_live.sql`
+      right after the reset: 3 / 7 / 5 / 11 / 0 / 6 / 0, empty tick and
+      alert lists
+- [ ] **101_live-feed-running.png** — TERMINAL 2:
+      `python -m app.live_feed --symbols ETHUSDT --max-events 20`
+      (Connecting… wss://data-stream.binance.vision…, lines ending in
+      `aggTrade:<id> -> INSERTED tick=N`, then the summary)
+- [ ] **102_binance-ticks-sql.png** — TERMINAL 3:
+      ```sh
+      psql -d stock_watchlist -c "SELECT t.tick_id, i.symbol, t.source, t.source_event_id, t.price, t.volume, t.observed_at, t.ingested_at FROM price_ticks t JOIN instruments i USING (instrument_id) WHERE t.source = 'BINANCE' ORDER BY t.tick_id DESC LIMIT 10;"
+      ```
+      (source BINANCE; source_event_id `aggTrade:…`; observed_at slightly
+      before ingested_at)
+- [ ] **103_live-latest-api.png** — `curl -s http://127.0.0.1:8000/instruments/7/latest | python -m json.tool`
+      (`"source": "BINANCE"`)
+- [ ] **104_live-ui.png** — browser: Instruments → ETHUSDT "Latest price &
+      history" with **Live refresh: ON**, while TERMINAL 2 runs
+      `python -m app.live_feed --symbols ETHUSDT --duration-seconds 60`
+      (Source BINANCE, chart moving)
+- [ ] **105_timeline-refusal.png** _(optional)_ — run
+      `python -m app.replay data/replay_prices.csv`, then
+      `python -m app.live_feed --symbols ETHUSDT --max-events 5`
+      → "Stored replay data is ahead of real time. Reset the demo database
+      before starting live mode." Then reset the database (setup command).
+- [ ] **106_unsupported-symbol.png** _(optional)_ —
+      `python -m app.live_feed --symbols RELIANCE` → "not a BINANCE
+      instrument in the database … use the offline replay"
+- [ ] **107_live-alert.png** _(only if it really happens)_ — create a rule
+      close to the current price in the web UI (e.g. ETHUSDT ABOVE current
+      price + 0.50), run the feed, and capture the `ALERT event=…` line
+      and the Alert History row. If the market doesn't cross it, there
+      is no alert: do not fake one. Use the replay/Demo alerts
+      (screenshots 85, 87) as alert evidence instead.
+- [ ] **108_db-inspector.png** — `psql -d stock_watchlist -f sql/08_inspect_live.sql`
+      after the feed: ticks per source (BINANCE), latest 10 ticks, latest
+      alerts
+- [ ] **109_live-tests.png** — `python -m unittest tests.test_live_feed -v`
+      (24 tests OK; no internet needed)
+- [ ] **110_full-regression.png** — one terminal:
+      ```sh
+      psql -q -d stock_watchlist -f sql/02_schema_tests.sql | tail -4
+      psql -q -d stock_watchlist -f sql/verify_spec.sql 2>&1 | tail -1
+      psql -q -d stock_watchlist -f sql/04_alert_tests.sql | tail -4
+      bash tests/concurrency_test.sh | tail -1
+      python -m unittest tests.test_replay tests.test_indexes tests.test_api tests.test_frontend tests.test_live_feed
+      ```
+      (51/51, MATCH, 50/50, ALL CONCURRENCY CHECKS PASSED, 103 tests OK)
+
+⚠ Screenshots 101–108 write live ticks into stock_watchlist. Run the
+reset command afterwards so the classroom database is clean again.
+
+## Not built (by decision)
+
+- Server push (SSE/WebSocket) to the browser. The optional 5 s "Live
+  refresh" polling is used instead.
+- SERIALIZABLE demonstration (optional idea from Phase 1; not requested).
