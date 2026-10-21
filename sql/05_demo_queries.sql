@@ -1,18 +1,3 @@
--- =====================================================================
--- 05_demo_queries.sql
--- Screenshot-friendly demonstration of the Phase 4 alert engine on the
--- SEED data (arjun's rules: rule 1 = RELIANCE ABOVE 3000, cooldown 300 s;
--- rule 2 = RELIANCE BELOW 2800).
---
--- Everything runs in ONE transaction that is ROLLED BACK at the end:
--- safe to run any number of times; the database is unchanged afterwards.
---
--- Run:  psql -d stock_watchlist -f sql/05_demo_queries.sql
--- Market time: T0 = 10 minutes after the later of now() and the latest
--- stored RELIANCE/BTCUSDT tick, so the demo also works after a replay
--- (no demo tick is "late", and rule 1's 300 s cooldown has expired).
--- The event view shows only events created by this demo.
--- =====================================================================
 
 \pset footer off
 \set QUIET on

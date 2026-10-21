@@ -1,0 +1,174 @@
+=== F01 | CASE | Describe how each alert rule behaves, in words
+SELECT r.rule_id, u.username, i.symbol, r.direction, r.threshold,
+       CASE
+           WHEN NOT r.is_active        THEN 'disabled - never fires'
+           WHEN r.cooldown_seconds = 0 THEN 'active - fires on every crossing'
+           ELSE 'active - at most one alert per ' || r.cooldown_seconds || ' s of market time'
+       END AS behaviour
+FROM alert_rules r
+JOIN users u       ON u.user_id = r.user_id
+JOIN instruments i ON i.instrument_id = r.instrument_id
+ORDER BY r.rule_id;
+ rule_id | username |  symbol  | direction |    threshold    |                      behaviour                      
+---------+----------+----------+-----------+-----------------+-----------------------------------------------------
+       1 | arjun    | RELIANCE | ABOVE     |   3000.00000000 | active - at most one alert per 300 s of market time
+       2 | arjun    | RELIANCE | BELOW     |   2800.00000000 | active - at most one alert per 300 s of market time
+       3 | arjun    | BTCUSDT  | ABOVE     | 100000.00000000 | active - at most one alert per 60 s of market time
+       4 | priya    | TCS      | BELOW     |   3500.00000000 | active - fires on every crossing
+       5 | priya    | INFY     | ABOVE     |   1600.00000000 | disabled - never fires
+       6 | kavya    | ETHUSDT  | BELOW     |   3000.00000000 | active - at most one alert per 120 s of market time
+(6 rows)
+
+=== F02 | COALESCE | Show the latest price and volume of every instrument, with readable text where there is none
+SELECT i.exchange, i.symbol,
+       coalesce(to_char(lt.price,  'FM999999990.00'), 'no ticks yet') AS latest_price,
+       coalesce(to_char(lt.volume, 'FM999999990.00'), 'unknown')      AS latest_volume
+FROM instruments i
+LEFT JOIN LATERAL (SELECT t.price, t.volume
+                   FROM price_ticks t
+                   WHERE t.instrument_id = i.instrument_id
+                   ORDER BY t.observed_at DESC, t.tick_id DESC
+                   LIMIT 1) lt ON true
+ORDER BY i.exchange, i.symbol;
+ exchange |  symbol  | latest_price | latest_volume 
+----------+----------+--------------+---------------
+ BINANCE  | BTCUSDT  | 100400.00    | 0.60
+ BINANCE  | ETHUSDT  | 2994.60      | unknown
+ NSE      | HDFCBANK | no ticks yet | unknown
+ NSE      | INFY     | 1612.00      | 450.00
+ NSE      | M&M      | no ticks yet | unknown
+ NSE      | RELIANCE | 2788.00      | unknown
+ NSE      | TCS      | 3490.00      | 750.00
+(7 rows)
+
+=== F03 | NULLIF | How many alerts per 100 ticks did each instrument produce (no division-by-zero error)?
+SELECT i.symbol,
+       count(DISTINCT t.tick_id)  AS ticks,
+       count(DISTINCT e.event_id) AS alerts,
+       round(100.0 * count(DISTINCT e.event_id)
+                   / nullif(count(DISTINCT t.tick_id), 0), 1) AS alerts_per_100_ticks
+FROM instruments i
+LEFT JOIN price_ticks t  ON t.instrument_id = i.instrument_id
+LEFT JOIN alert_events e ON e.tick_id = t.tick_id
+GROUP BY i.symbol
+ORDER BY i.symbol;
+  symbol  | ticks | alerts | alerts_per_100_ticks 
+----------+-------+--------+----------------------
+ BTCUSDT  |     8 |      2 |                 25.0
+ ETHUSDT  |     2 |      1 |                 50.0
+ HDFCBANK |     0 |      0 |               (null)
+ INFY     |     2 |      0 |                  0.0
+ M&M      |     0 |      0 |               (null)
+ RELIANCE |    12 |      3 |                 25.0
+ TCS      |     6 |      2 |                 33.3
+(7 rows)
+
+=== F04 | date/time | Over what span of market time did each instrument trade?
+SELECT i.symbol,
+       to_char(min(t.observed_at) AT TIME ZONE 'Asia/Kolkata', 'HH24:MI:SS') AS first_tick_ist,
+       to_char(max(t.observed_at) AT TIME ZONE 'Asia/Kolkata', 'HH24:MI:SS') AS last_tick_ist,
+       max(t.observed_at) - min(t.observed_at)                          AS span,
+       extract(epoch FROM max(t.observed_at) - min(t.observed_at))::int AS span_seconds
+FROM price_ticks t
+JOIN instruments i ON i.instrument_id = t.instrument_id
+GROUP BY i.symbol
+ORDER BY span_seconds DESC;
+  symbol  | first_tick_ist | last_tick_ist |   span   | span_seconds 
+----------+----------------+---------------+----------+--------------
+ RELIANCE | 10:03:36       | 10:11:16      | 00:07:40 |          460
+ BTCUSDT  | 10:03:41       | 10:06:26      | 00:02:45 |          165
+ TCS      | 10:03:36       | 10:05:46      | 00:02:10 |          130
+ ETHUSDT  | 10:04:31       | 10:05:26      | 00:00:55 |           55
+ INFY     | 10:08:36       | 10:08:46      | 00:00:10 |           10
+(5 rows)
+
+=== F05 | date/time | When (in market time) does each rule leave its cooldown after its last alert?
+SELECT r.rule_id, i.symbol, r.direction,
+       make_interval(secs => r.cooldown_seconds) AS cooldown,
+       extract(epoch FROM la.observed_at - rs.run_start)::int AS last_alert_at_s,
+       extract(epoch FROM la.observed_at + make_interval(secs => r.cooldown_seconds)
+                          - rs.run_start)::int                AS can_fire_again_at_s,
+       to_char((la.observed_at + make_interval(secs => r.cooldown_seconds))
+               AT TIME ZONE 'Asia/Kolkata', 'HH24:MI:SS')     AS can_fire_again_ist
+FROM alert_rules r
+JOIN instruments i ON i.instrument_id = r.instrument_id
+CROSS JOIN (SELECT min(observed_at) AS run_start FROM price_ticks) AS rs
+JOIN LATERAL (SELECT t.observed_at
+              FROM alert_events e
+              JOIN price_ticks t ON t.tick_id = e.tick_id
+              WHERE e.rule_id = r.rule_id
+              ORDER BY t.observed_at DESC, t.tick_id DESC
+              LIMIT 1) AS la ON true
+ORDER BY r.rule_id;
+ rule_id |  symbol  | direction | cooldown | last_alert_at_s | can_fire_again_at_s | can_fire_again_ist 
+---------+----------+-----------+----------+-----------------+---------------------+--------------------
+       1 | RELIANCE | ABOVE     | 00:05:00 |             400 |                 700 | 10:15:16
+       2 | RELIANCE | BELOW     | 00:05:00 |             450 |                 750 | 10:16:06
+       3 | BTCUSDT  | ABOVE     | 00:01:00 |             170 |                 230 | 10:07:26
+       4 | TCS      | BELOW     | 00:00:00 |             130 |                 130 | 10:05:46
+       6 | ETHUSDT  | BELOW     | 00:02:00 |             110 |                 230 | 10:07:26
+(5 rows)
+
+=== F06 | string | Build display labels for every instrument
+SELECT format('%s:%s', exchange, symbol) AS ticker,
+       upper(name)                       AS name_upper,
+       length(name)                      AS name_length,
+       replace(name, ' Ltd', '')         AS short_name,
+       lower(quote_currency)             AS currency_lower
+FROM instruments
+ORDER BY ticker;
+     ticker      |          name_upper           | name_length |        short_name         | currency_lower 
+-----------------+-------------------------------+-------------+---------------------------+----------------
+ BINANCE:BTCUSDT | BITCOIN / TETHER              |          16 | Bitcoin / Tether          | usdt
+ BINANCE:ETHUSDT | ETHER / TETHER                |          14 | Ether / Tether            | usdt
+ NSE:HDFCBANK    | HDFC BANK LTD                 |          13 | HDFC Bank                 | inr
+ NSE:INFY        | INFOSYS LTD                   |          11 | Infosys                   | inr
+ NSE:M&M         | MAHINDRA & MAHINDRA LTD       |          23 | Mahindra & Mahindra       | inr
+ NSE:RELIANCE    | RELIANCE INDUSTRIES LTD       |          23 | Reliance Industries       | inr
+ NSE:TCS         | TATA CONSULTANCY SERVICES LTD |          29 | Tata Consultancy Services | inr
+(7 rows)
+
+=== F07 | string | Show each user with a display name and a masked email (privacy)
+SELECT username,
+       initcap(username) AS display_name,
+       left(email, 1) || repeat('*', position('@' IN email) - 2)
+                      || substring(email FROM position('@' IN email)) AS masked_email,
+       split_part(email, '@', 2) AS email_domain
+FROM users
+ORDER BY username;
+ username | display_name |   masked_email    | email_domain 
+----------+--------------+-------------------+--------------
+ arjun    | Arjun        | a****@example.com | example.com
+ kavya    | Kavya        | k****@example.com | example.com
+ priya    | Priya        | p****@example.com | example.com
+(3 rows)
+
+=== F08 | numeric | How much did each instrument move from its first to its last tick?
+WITH first_last AS (
+    SELECT t.instrument_id,
+           (array_agg(t.price ORDER BY t.observed_at, t.tick_id))[1]           AS first_price,
+           (array_agg(t.price ORDER BY t.observed_at DESC, t.tick_id DESC))[1] AS last_price
+    FROM price_ticks t
+    GROUP BY t.instrument_id
+)
+SELECT i.symbol,
+       round(fl.first_price, 2)                                          AS first_price,
+       round(fl.last_price, 2)                                           AS last_price,
+       round(fl.last_price - fl.first_price, 2)                          AS change,
+       round(100 * (fl.last_price - fl.first_price) / fl.first_price, 2) AS change_pct,
+       abs(round(100 * (fl.last_price - fl.first_price) / fl.first_price, 2)) AS abs_change_pct,
+       sign(fl.last_price - fl.first_price)                              AS direction_sign,
+       floor(fl.last_price)                                              AS last_floor,
+       ceil(fl.last_price)                                               AS last_ceil
+FROM first_last fl
+JOIN instruments i ON i.instrument_id = fl.instrument_id
+ORDER BY abs_change_pct DESC;
+  symbol  | first_price | last_price | change  | change_pct | abs_change_pct | direction_sign | last_floor | last_ceil 
+----------+-------------+------------+---------+------------+----------------+----------------+------------+-----------
+ RELIANCE |     2985.50 |    2788.00 | -197.50 |      -6.62 |           6.62 |             -1 |       2788 |      2788
+ ETHUSDT  |     3048.10 |    2994.60 |  -53.50 |      -1.76 |           1.76 |             -1 |       2994 |      2995
+ TCS      |     3552.00 |    3490.00 |  -62.00 |      -1.75 |           1.75 |             -1 |       3490 |      3490
+ INFY     |     1585.00 |    1612.00 |   27.00 |       1.70 |           1.70 |              1 |       1612 |      1612
+ BTCUSDT  |    99450.00 |  100400.00 |  950.00 |       0.96 |           0.96 |              1 |     100400 |    100400
+(5 rows)
+

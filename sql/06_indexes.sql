@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 06_indexes.sql
--- Phase 6: performance index for price history.
+-- Performance index for price history.
 --
 -- Kept separate from 00_schema.sql on purpose: 00 defines the logical
 -- design (tables, keys, constraints); this file adds a physical access

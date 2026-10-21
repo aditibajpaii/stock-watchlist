@@ -1,7 +1,9 @@
-# Normalization Notes (study material, not report text)
+# Normalization Notes
 
 Based on the LIVE schema (PostgreSQL 18.6, `stock_watchlist`), which was
-verified to match docs/PHASE1_SPEC.md by `sql/verify_spec.sql`.
+verified to match docs/SCHEMA_DESIGN.md by `sql/verify_spec.sql`.
+The full Review 2 proof is docs/review2/NORMALIZATION_PROOF.md.
+Corrected on 2026-10-13 (Review 2); each change and the replaced text are listed in docs/review2/OLDER_DOCS_CORRECTIONS.md.
 
 ---
 
@@ -40,7 +42,8 @@ particular any hidden one whose left side is not a key.
   be in the table today.
 - One counterexample that the schema allows is enough to disprove an FD.
 - Counterexamples below were inserted in a rolled-back transaction on
-  2026-09-25 to prove the schema accepts them.
+  2026-09-25 to show that the schema does not enforce these FDs; whether
+  an FD holds is decided by the business rules.
 
 ---
 
@@ -87,14 +90,14 @@ FDs (non-trivial):
 - instrument_id → exchange, symbol, name, quote_currency, is_active
 - (exchange, symbol) → instrument_id, name, quote_currency, is_active
 
-FDs checked and rejected, with the counterexample the schema accepts:
+Candidate FDs checked (rejected by a counterexample, or not adopted as a business rule):
 
 | Candidate FD | Counterexample | Verdict |
 |---|---|---|
-| symbol → name | NSE RELIANCE and BSE RELIANCE share a symbol; in general different companies can share a ticker on different exchanges | not an FD |
+| symbol → name | not adopted as a business rule: symbols are unique only within an exchange (`uq_instruments_exchange_symbol`). The RELIANCE example (same company, same name) does not disprove it; no verified collision is claimed | not used as an FD |
 | exchange → quote_currency | BINANCE BTCUSDT = USDT, BINANCE ETHBTC = BTC | not an FD |
 | name → anything | NSE and BSE RELIANCE share the same name | not an FD |
-| exchange → asset_class | would be TRUE (BINANCE is always crypto) | **removed the column in Phase 1** |
+| exchange → asset_class | not valid in general (NSE lists equities and ETFs); if it held, it would be a partial dependency on (exchange, symbol), i.e. a **2NF** violation | **column not included** |
 
 Checks:
 - **1NF:** all columns atomic. Exchange and symbol are separate columns,
@@ -107,7 +110,7 @@ Checks:
 - **BCNF:** the determinants are instrument_id and (exchange, symbol),
   both keys. ✔ **BCNF**
 
-Nuance for the viva:
+Nuance:
 - "Every NSE instrument is priced in INR" is true, but it is not an FD,
   because it fails for BINANCE. An FD must hold for every value of
   exchange.
@@ -293,7 +296,11 @@ FDs:
 
 Partial-dependency check:
 - rule_id → fired_at is false, because one rule fires many times.
-- tick_id → fired_at is false, because one tick can fire several rules.
+- tick_id → fired_at is not an FD: fired_at is the time the event row was
+  recorded. On the application path the events of one tick are recorded in
+  the tick's own transaction and share one value, but that is a property of
+  the write path, not a rule of the data
+  (docs/review2/NORMALIZATION_PROOF.md §9).
 
 Checks:
 - **1NF:** atomic, with a PK.
@@ -301,7 +308,8 @@ Checks:
 - **3NF:** fired_at determines nothing.
 - **BCNF:** both determinants are keys. ✔ **BCNF**
 
-What was deliberately NOT stored, because it would break 3NF:
+What was deliberately NOT stored, because it would break 2NF (a partial
+dependency on the candidate key (rule_id, tick_id)):
 
 | Column | Hidden FD it would create | Found instead via |
 |---|---|---|
@@ -309,15 +317,19 @@ What was deliberately NOT stored, because it would break 3NF:
 | observed_at | tick_id → observed_at | price_ticks |
 | price | tick_id → price | price_ticks |
 
-With any of these present, event_id → tick_id → price would be a
-transitive dependency: the left side tick_id is not a key of
-alert_events, and price is non-prime.
+With any of these present, tick_id → price (for example) would be a
+partial dependency: tick_id is a proper subset of the candidate key
+(rule_id, tick_id), and price is non-prime. Seen from the primary key
+event_id alone, event_id → tick_id → price is also transitive.
 
 Not a normalization issue, but an integrity rule:
 - The rule's instrument must equal the tick's instrument.
 - This is a constraint across two tables, not an FD inside one.
-- Phase 4 enforces it with a BEFORE INSERT trigger, without adding a
-  column.
+- Trigger trg_alert_events_check_instrument (BEFORE INSERT OR UPDATE OF
+  rule_id, tick_id on alert_events) checks it, without adding a column.
+- Later instrument_id changes on alert_rules or price_ticks are not
+  checked (docs/review2/sql_output/22_integrity_scope.out); no application
+  path makes them.
 
 ---
 
@@ -334,14 +346,15 @@ Not a normalization issue, but an integrity rule:
 | alert_events | event_id | event_id; (rule_id, tick_id) | yes | none | none | BCNF |
 
 Design decisions that keep these results true:
-- asset_class was removed (exchange → asset_class).
+- asset_class is not stored (no feature needs it; exchange → asset_class
+  is not a valid FD in general).
 - alert_events has no copied price, observed_at or instrument_id.
 - watchlist_items has no user_id and no symbol.
 - The M:N relationship is a junction table, not a list column.
 
 ---
 
-## 9. Five key examples (with WHY / VIVA / ANSWER)
+## 9. Five key examples (with WHY / Q / ANSWER)
 
 ### 9.1 Junction table vs comma-separated symbols
 
@@ -369,7 +382,7 @@ Actual design: one row per (list, instrument) in watchlist_items.
 
 WHY: a list inside a cell hides many facts in one value, so the DBMS
 cannot check or index them.
-VIVA: "Why not store the symbols as a comma-separated column?"
+Q: "Why not store the symbols as a comma-separated column?"
 ANSWER: It breaks 1NF. With a junction table each pair is one row, so FK
 and PK constraints can enforce "the instrument exists" and "no
 duplicates", and the M:N relationship is queryable.
@@ -388,7 +401,7 @@ duplicates", and the M:N relationship is queryable.
 
 WHY: the surrogate PK is for referencing, and the natural key is for
 correctness. Keeping both gives both.
-VIVA: "If tick_id is the PK, what stops the same tick being stored twice?"
+Q: "If tick_id is the PK, what stops the same tick being stored twice?"
 ANSWER: The UNIQUE constraint on (source, instrument_id, source_event_id).
 Schema test A8 shows a second insert of the same event is rejected with
 uq_price_ticks_source_event.
@@ -407,7 +420,7 @@ uq_price_ticks_source_event.
 
 WHY: a timestamp tells you when something happened, not which thing
 happened.
-VIVA: "Why not make (instrument_id, observed_at) the key?"
+Q: "Why not make (instrument_id, observed_at) the key?"
 ANSWER: Timestamps can legitimately repeat, so that key would throw away
 real data. Identity comes from the source's event id, and observed_at is
 only used for ordering.
@@ -430,7 +443,7 @@ only used for ordering.
   RESTRICT, and ticks are append-only by design.
 
 WHY: store each fact once, in the table whose key determines it.
-VIVA: "Wouldn't storing the price in the event be faster?"
+Q: "Wouldn't storing the price in the event be faster?"
 ANSWER: Slightly, but it duplicates a fact tick_id already determines,
 which breaks 3NF and risks the two copies disagreeing. The join goes
 through primary keys, so it is cheap.
@@ -451,7 +464,7 @@ through primary keys, so it is cheap.
 
 WHY: the surrogate key identifies the row, and the alternate key stops
 two rows meaning the same thing.
-VIVA: "Why do you need a UNIQUE constraint if rule_id is already the PK?"
+Q: "Why do you need a UNIQUE constraint if rule_id is already the PK?"
 ANSWER: rule_id is always unique, even for two identical rules. The
 UNIQUE on the four defining columns is what stops a user creating the
 same rule twice, as schema test A11 shows.
@@ -464,5 +477,5 @@ same rule twice, as schema test A11 shows.
 |---|---|---|
 | 1 | source_event_id looks composite ("run:row") | atomic as long as it is never parsed in SQL; rule recorded above |
 | 2 | "NSE ⇒ INR" is true in reality | not an FD (BINANCE counterexample); revisit only if all exchanges become single-currency |
-| 3 | rule instrument = tick instrument across tables | integrity rule, not normalization; Phase 4 trigger |
-| 4 | the alert_rules alternate key assumes immutable definition columns | design rule, not DB-enforced (approved) |
+| 3 | rule instrument = tick instrument across tables | integrity rule, not normalization; enforced by trigger |
+| 4 | the alert_rules alternate key assumes immutable definition columns | design rule, not DB-enforced |

@@ -1,4 +1,4 @@
-"""Phase 5 tests for app/replay.py, against a REAL PostgreSQL server.
+"""Tests for app/replay.py, against a REAL PostgreSQL server.
 
 Each test gets a fresh throwaway database cloned from a template that is
 built once from sql/00_schema.sql, 01_seed.sql, 03_functions_triggers.sql
@@ -29,8 +29,8 @@ from app import replay
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_CSV = ROOT / "data" / "replay_prices.csv"
 PG_BIN = Path(os.environ.get("PG_BIN", "/opt/homebrew/opt/postgresql@18/bin"))
-TEMPLATE_DB = "stock_watchlist_p5_template"
-TEST_DB = "stock_watchlist_p5_test"
+TEMPLATE_DB = "stock_watchlist_replay_template"
+TEST_DB = "stock_watchlist_replay_test"
 HEADER = "offset_seconds,exchange,symbol,price,volume\n"
 
 # (rule_id, row number) pairs the demo CSV must produce on a fresh seed DB
@@ -305,7 +305,7 @@ class ReplayAlertTests(ReplayTestCase):
             csv_prices = [r.price for r in replay.load_csv(str(DEMO_CSV)) if r.symbol == symbol]
             self.assertEqual(prices, csv_prices, symbol)
 
-    def test_15_phase2_and_phase4_sql_suites_pass_after_replay(self):
+    def test_15_schema_and_alert_sql_suites_pass_after_replay(self):
         self.assertEqual(self.run_replay(DEMO_CSV, "--run-id", "P")[0], 0)
         for suite, summary in (("04_alert_tests.sql", "50 |      0 |    50"),
                                ("02_schema_tests.sql", "51 |      0 |    51")):

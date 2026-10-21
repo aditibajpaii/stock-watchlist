@@ -1,0 +1,93 @@
+=== B01 | SELECT, WHERE, ORDER BY | Which NSE instruments are active, in symbol order?
+SELECT exchange, symbol, name, quote_currency
+FROM instruments
+WHERE exchange = 'NSE' AND is_active
+ORDER BY symbol;
+ exchange |  symbol  |             name              | quote_currency 
+----------+----------+-------------------------------+----------------
+ NSE      | HDFCBANK | HDFC Bank Ltd                 | INR
+ NSE      | INFY     | Infosys Ltd                   | INR
+ NSE      | M&M      | Mahindra & Mahindra Ltd       | INR
+ NSE      | RELIANCE | Reliance Industries Ltd       | INR
+ NSE      | TCS      | Tata Consultancy Services Ltd | INR
+(5 rows)
+
+=== B02 | SELECT, DISTINCT, ORDER BY | Which exchange and quote-currency combinations are listed?
+SELECT DISTINCT exchange, quote_currency
+FROM instruments
+ORDER BY exchange;
+ exchange | quote_currency 
+----------+----------------
+ BINANCE  | USDT
+ NSE      | INR
+(2 rows)
+
+=== B03 | SELECT, WHERE, BETWEEN, ORDER BY | Which RELIANCE ticks traded between 3000 and 3020 (inclusive)?
+SELECT tick_id, price, volume, source_event_id
+FROM price_ticks
+WHERE instrument_id = 1                 -- NSE RELIANCE (instrument_id from the seed)
+  AND price BETWEEN 3000 AND 3020
+ORDER BY observed_at, tick_id;
+ tick_id |     price     |    volume     | source_event_id 
+---------+---------------+---------------+-----------------
+       6 | 3002.40000000 | 1500.00000000 | r2demo:000006
+       8 | 3011.00000000 |  700.00000000 | r2demo:000008
+      11 | 3018.75000000 |        (null) | r2demo:000011
+      23 | 3004.00000000 | 1000.00000000 | r2demo:000023
+(4 rows)
+
+=== B04 | SELECT, WHERE, IN, ORDER BY | Show the IT stocks TCS and INFY and the bank HDFCBANK
+SELECT symbol, name, exchange
+FROM instruments
+WHERE exchange = 'NSE'
+  AND symbol IN ('TCS', 'INFY', 'HDFCBANK')
+ORDER BY symbol;
+  symbol  |             name              | exchange 
+----------+-------------------------------+----------
+ HDFCBANK | HDFC Bank Ltd                 | NSE
+ INFY     | Infosys Ltd                   | NSE
+ TCS      | Tata Consultancy Services Ltd | NSE
+(3 rows)
+
+=== B05 | SELECT, WHERE, LIKE, ORDER BY | Which instruments are quoted against Tether (symbol ends in USDT)?
+SELECT exchange, symbol, name, quote_currency
+FROM instruments
+WHERE symbol LIKE '%USDT'
+ORDER BY symbol;
+ exchange | symbol  |       name       | quote_currency 
+----------+---------+------------------+----------------
+ BINANCE  | BTCUSDT | Bitcoin / Tether | USDT
+ BINANCE  | ETHUSDT | Ether / Tether   | USDT
+(2 rows)
+
+=== B06 | SELECT, WHERE, IS NULL, ORDER BY | Which ticks arrived with an unknown volume (NULL, not zero)?
+SELECT tick_id, instrument_id, price, volume, source_event_id
+FROM price_ticks
+WHERE volume IS NULL
+ORDER BY tick_id;
+ tick_id | instrument_id |      price      | volume | source_event_id 
+---------+---------------+-----------------+--------+-----------------
+       3 |             6 |  99450.00000000 | (null) | r2demo:000003
+       5 |             2 |   3531.25000000 | (null) | r2demo:000005
+      11 |             1 |   3018.75000000 | (null) | r2demo:000011
+      14 |             6 | 100310.00000000 | (null) | r2demo:000014
+      18 |             7 |   2994.60000000 | (null) | r2demo:000018
+      24 |             1 |   2990.00000000 | (null) | r2demo:000024
+      28 |             1 |   3030.00000000 | (null) | r2demo:000028
+      30 |             1 |   2788.00000000 | (null) | r2demo:000030
+(8 rows)
+
+=== B07 | SELECT, ORDER BY | What are the five most recent ticks by market time?
+SELECT tick_id, instrument_id, price, observed_at
+FROM price_ticks
+ORDER BY observed_at DESC, tick_id DESC
+LIMIT 5;
+ tick_id | instrument_id |     price     |        observed_at        
+---------+---------------+---------------+---------------------------
+      30 |             1 | 2788.00000000 | 2026-10-13 10:11:16+05:30
+      29 |             1 | 2795.00000000 | 2026-10-13 10:11:06+05:30
+      28 |             1 | 3030.00000000 | 2026-10-13 10:10:46+05:30
+      27 |             1 | 3021.50000000 | 2026-10-13 10:10:16+05:30
+      26 |             3 | 1612.00000000 | 2026-10-13 10:08:46+05:30
+(5 rows)
+

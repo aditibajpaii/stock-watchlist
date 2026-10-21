@@ -1,0 +1,154 @@
+CREATE TEMP VIEW txn_state AS
+SELECT u.username, w.name AS watchlist
+FROM users u
+LEFT JOIN watchlists w ON w.user_id = u.user_id
+WHERE u.username = 'txn_demo'
+ORDER BY w.name;
+===== Start: no txn_demo user yet =====
+SELECT count(*) AS txn_demo_users FROM users WHERE username = 'txn_demo';
+ txn_demo_users 
+----------------
+              0
+(1 row)
+
+===== T1. BEGIN ... COMMIT: the change becomes permanent =====
+BEGIN;
+INSERT INTO users (username, email)
+VALUES ('txn_demo', 'txn_demo@example.com')
+RETURNING user_id, username;
+ user_id | username 
+---------+----------
+       7 | txn_demo
+(1 row)
+
+inside the transaction this session already sees its own uncommitted row:
+SELECT * FROM txn_state;
+ username | watchlist 
+----------+-----------
+ txn_demo | (null)
+(1 row)
+
+COMMIT;
+after COMMIT:
+SELECT * FROM txn_state;
+ username | watchlist 
+----------+-----------
+ txn_demo | (null)
+(1 row)
+
+===== T2. BEGIN ... ROLLBACK: the change is undone =====
+BEGIN;
+INSERT INTO watchlists (user_id, name)
+SELECT user_id, 'Scratch' FROM users WHERE username = 'txn_demo'
+RETURNING watchlist_id, name;
+ watchlist_id |  name   
+--------------+---------
+           10 | Scratch
+(1 row)
+
+SELECT * FROM txn_state;
+ username | watchlist 
+----------+-----------
+ txn_demo | Scratch
+(1 row)
+
+ROLLBACK;
+after ROLLBACK the Scratch watchlist never existed:
+SELECT * FROM txn_state;
+ username | watchlist 
+----------+-----------
+ txn_demo | (null)
+(1 row)
+
+===== T3. SAVEPOINT and ROLLBACK TO SAVEPOINT: undo only part of a transaction =====
+BEGIN;
+INSERT INTO watchlists (user_id, name)
+SELECT user_id, 'Txn Main' FROM users WHERE username = 'txn_demo';
+SAVEPOINT after_main;
+>>> EXPECTED ERROR [23505] a second "Txn Main" for the same user breaks UNIQUE(user_id, name)
+INSERT INTO watchlists (user_id, name)
+SELECT user_id, 'Txn Main' FROM users WHERE username = 'txn_demo';
+psql:sql/review2/16_transactions.sql:52: ERROR:  duplicate key value violates unique constraint "uq_watchlists_user_name"
+DETAIL:  Key (user_id, name)=(7, Txn Main) already exists.
+<<< actual SQLSTATE: 23505
+>>> EXPECTED ERROR [25P02] after an error the transaction is aborted: every statement fails until a rollback
+SELECT * FROM txn_state;
+psql:sql/review2/16_transactions.sql:55: ERROR:  current transaction is aborted, commands ignored until end of transaction block
+<<< actual SQLSTATE: 25P02
+ROLLBACK TO SAVEPOINT after_main;
+after ROLLBACK TO SAVEPOINT the work done before the savepoint is kept and the transaction continues:
+INSERT INTO watchlists (user_id, name)
+SELECT user_id, 'Txn Second' FROM users WHERE username = 'txn_demo';
+SELECT * FROM txn_state;
+ username | watchlist  
+----------+------------
+ txn_demo | Txn Main
+ txn_demo | Txn Second
+(2 rows)
+
+COMMIT;
+after COMMIT: Txn Main and Txn Second are stored; the failed duplicate is not
+SELECT * FROM txn_state;
+ username | watchlist  
+----------+------------
+ txn_demo | Txn Main
+ txn_demo | Txn Second
+(2 rows)
+
+===== T4. Atomicity with the alert engine: a tick and the alert its trigger creates are one unit =====
+SELECT count(*) AS ticks_before FROM price_ticks 
+SELECT count(*) AS events_before FROM alert_events 
+SELECT max(observed_at) + interval '5 minutes' AS t_new
+FROM price_ticks WHERE instrument_id = 1 
+BEGIN;
+RELIANCE 2788 -> 3010 crosses arjun ABOVE 3000 (cooldown already over):
+SELECT * FROM ingest_tick('NSE', 'RELIANCE', '2026-10-13 10:16:16+05:30'::timestamptz, 3010.00, 500, 'MANUAL', 'r2-txn-1');
+  status  | tick_id 
+----------+---------
+ INSERTED |      36
+(1 row)
+
+SELECT (SELECT count(*) FROM price_ticks)  - 30  AS new_ticks,
+       (SELECT count(*) FROM alert_events) - 8 AS new_alert_events;
+ new_ticks | new_alert_events 
+-----------+------------------
+         1 |                1
+(1 row)
+
+ROLLBACK;
+after ROLLBACK the tick AND the alert created by its trigger are both gone:
+SELECT (SELECT count(*) FROM price_ticks)  - 30  AS new_ticks,
+       (SELECT count(*) FROM alert_events) - 8 AS new_alert_events;
+ new_ticks | new_alert_events 
+-----------+------------------
+         0 |                0
+(1 row)
+
+===== T5. A NEW connection sees exactly the committed data =====
+SELECT u.username, w.name AS watchlist
+FROM users u
+JOIN watchlists w ON w.user_id = u.user_id
+WHERE u.username = 'txn_demo'
+ORDER BY w.name;
+ username | watchlist  
+----------+------------
+ txn_demo | Txn Main
+ txn_demo | Txn Second
+(2 rows)
+
+===== Clean-up: delete txn_demo (ON DELETE CASCADE removes its watchlists) =====
+DELETE FROM users WHERE username = 'txn_demo' RETURNING user_id, username;
+ user_id | username 
+---------+----------
+       7 | txn_demo
+(1 row)
+
+SELECT (SELECT count(*) FROM users)        AS users,
+       (SELECT count(*) FROM watchlists)   AS watchlists,
+       (SELECT count(*) FROM price_ticks)  AS price_ticks,
+       (SELECT count(*) FROM alert_events) AS alert_events;
+ users | watchlists | price_ticks | alert_events 
+-------+------------+-------------+--------------
+     3 |          5 |          30 |            8
+(1 row)
+

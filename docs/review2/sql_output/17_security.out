@@ -1,0 +1,365 @@
+===== 0. Start clean: remove r2_* roles left by an earlier run =====
+DO $$
+DECLARE
+    r TEXT;
+BEGIN
+    FOREACH r IN ARRAY ARRAY['r2_analyst', 'r2_support', 'r2_feed', 'r2_owner'] LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+            EXECUTE format('REASSIGN OWNED BY %I TO CURRENT_USER', r);
+            EXECUTE format('DROP OWNED BY %I', r);
+            EXECUTE format('DROP ROLE %I', r);
+        END IF;
+    END LOOP;
+END $$;
+===== 1. CREATE ROLE (no LOGIN, no password, no superuser) =====
+CREATE ROLE r2_owner   NOLOGIN;
+CREATE ROLE r2_analyst NOLOGIN;
+CREATE ROLE r2_support NOLOGIN;
+CREATE ROLE r2_feed    NOLOGIN;
+SELECT rolname, rolcanlogin, rolsuper, rolcreaterole, rolcreatedb
+FROM pg_roles WHERE rolname LIKE 'r2\_%' ORDER BY rolname;
+  rolname   | rolcanlogin | rolsuper | rolcreaterole | rolcreatedb 
+------------+-------------+----------+---------------+-------------
+ r2_analyst | f           | f        | f             | f
+ r2_feed    | f           | f        | f             | f
+ r2_owner   | f           | f        | f             | f
+ r2_support | f           | f        | f             | f
+(4 rows)
+
+===== 2. Database and schema access: only the demo roles may connect to the sandbox =====
+REVOKE CONNECT ON DATABASE stock_watchlist_review2_sandbox FROM PUBLIC;
+GRANT  CONNECT ON DATABASE stock_watchlist_review2_sandbox TO r2_analyst, r2_support, r2_feed;
+GRANT  USAGE ON SCHEMA review2 TO r2_owner, r2_analyst, r2_support, r2_feed;
+Functions and procedures are executable by PUBLIC by default. BEFORE the REVOKE:
+SELECT has_function_privilege('r2_analyst',
+       'review2.sp_set_rule_active(bigint, boolean, boolean)', 'EXECUTE') AS analyst_can_execute;
+ analyst_can_execute 
+---------------------
+ t
+(1 row)
+
+REVOKE ALL ON ALL ROUTINES IN SCHEMA review2 FROM PUBLIC;
+AFTER REVOKE ALL ON ALL ROUTINES IN SCHEMA review2 FROM PUBLIC:
+SELECT has_function_privilege('r2_analyst',
+       'review2.sp_set_rule_active(bigint, boolean, boolean)', 'EXECUTE') AS analyst_can_execute;
+ analyst_can_execute 
+---------------------
+ f
+(1 row)
+
+===== 3. The owner gets only what its objects need =====
+GRANT SELECT ON instruments, price_ticks, alert_rules, alert_events TO r2_owner;
+GRANT UPDATE (cooldown_seconds, is_active) ON alert_rules TO r2_owner;
+GRANT INSERT ON price_ticks, alert_events TO r2_owner;
+GRANT UPDATE (is_active) ON instruments TO r2_owner;
+ALTER VIEW review2.v_instrument_activity OWNER TO r2_owner;
+ALTER VIEW review2.v_active_alert_rules  OWNER TO r2_owner;
+===== 4. Procedure as the only write path for support: SECURITY DEFINER, fixed search_path =====
+ALTER PROCEDURE review2.sp_set_rule_active(BIGINT, BOOLEAN, BOOLEAN) SECURITY DEFINER;
+ALTER PROCEDURE review2.sp_set_rule_active(BIGINT, BOOLEAN, BOOLEAN) SET search_path = public, pg_temp;
+ALTER PROCEDURE review2.sp_set_rule_active(BIGINT, BOOLEAN, BOOLEAN) OWNER TO r2_owner;
+GRANT EXECUTE ON PROCEDURE review2.sp_set_rule_active(BIGINT, BOOLEAN, BOOLEAN) TO r2_support;
+===== 5. Function as the only write path for the feed =====
+CREATE OR REPLACE FUNCTION review2.fn_feed_ingest(
+    p_exchange TEXT, p_symbol TEXT, p_observed_at TIMESTAMPTZ,
+    p_price NUMERIC, p_volume NUMERIC, p_source_event_id TEXT)
+RETURNS TABLE (status TEXT, tick_id BIGINT)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT * FROM public.ingest_tick(p_exchange, p_symbol, p_observed_at,
+                                     p_price, p_volume, 'BINANCE', p_source_event_id);
+$$;
+ALTER FUNCTION review2.fn_feed_ingest(TEXT, TEXT, TIMESTAMPTZ, NUMERIC, NUMERIC, TEXT) OWNER TO r2_owner;
+REVOKE ALL ON FUNCTION review2.fn_feed_ingest(TEXT, TEXT, TIMESTAMPTZ, NUMERIC, NUMERIC, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION review2.fn_feed_ingest(TEXT, TEXT, TIMESTAMPTZ, NUMERIC, NUMERIC, TEXT) TO r2_feed;
+===== 6. GRANT per role =====
+GRANT SELECT ON instruments, price_ticks TO r2_analyst;
+GRANT SELECT ON review2.v_instrument_activity TO r2_analyst;
+GRANT SELECT ON review2.v_active_alert_rules TO r2_support;
+GRANT UPDATE (cooldown_seconds) ON review2.v_active_alert_rules TO r2_support;
+===== 7. Privilege matrix (computed by PostgreSQL with has_*_privilege) =====
+SELECT r.rolname AS role,
+       has_table_privilege(r.rolname, 'public.users', 'SELECT')        AS users_select,
+       has_table_privilege(r.rolname, 'public.instruments', 'SELECT')  AS instruments_select,
+       has_table_privilege(r.rolname, 'public.price_ticks', 'SELECT')  AS ticks_select,
+       has_table_privilege(r.rolname, 'public.price_ticks', 'INSERT')  AS ticks_insert,
+       has_table_privilege(r.rolname, 'public.alert_rules', 'SELECT')  AS rules_select,
+       has_table_privilege(r.rolname, 'public.alert_rules', 'UPDATE')  AS rules_update,
+       has_table_privilege(r.rolname, 'review2.v_instrument_activity', 'SELECT') AS v2_select,
+       has_table_privilege(r.rolname, 'review2.v_active_alert_rules', 'SELECT')  AS v3_select,
+       has_column_privilege(r.rolname, 'review2.v_active_alert_rules', 'cooldown_seconds', 'UPDATE') AS v3_upd_cooldown,
+       has_column_privilege(r.rolname, 'review2.v_active_alert_rules', 'is_active', 'UPDATE')        AS v3_upd_is_active,
+       has_function_privilege(r.rolname, 'review2.sp_set_rule_active(bigint, boolean, boolean)', 'EXECUTE') AS exec_sp_set_rule,
+       has_function_privilege(r.rolname,
+           'review2.fn_feed_ingest(text, text, timestamptz, numeric, numeric, text)', 'EXECUTE')   AS exec_feed_ingest
+FROM pg_roles r
+WHERE r.rolname IN ('r2_analyst', 'r2_support', 'r2_feed')
+ORDER BY r.rolname;
+    role    | users_select | instruments_select | ticks_select | ticks_insert | rules_select | rules_update | v2_select | v3_select | v3_upd_cooldown | v3_upd_is_active | exec_sp_set_rule | exec_feed_ingest 
+------------+--------------+--------------------+--------------+--------------+--------------+--------------+-----------+-----------+-----------------+------------------+------------------+------------------
+ r2_analyst | f            | t                  | t            | f            | f            | f            | t         | f         | f               | f                | f                | f
+ r2_feed    | f            | f                  | f            | f            | f            | f            | f         | f         | f               | f                | f                | t
+ r2_support | f            | f                  | f            | f            | f            | f            | f         | t         | t               | f                | t                | f
+(3 rows)
+
+===== 8. Access privileges as stored in the catalog (psql \dp) =====
+                                 Access privileges
+ Schema |    Name     | Type  |  Access privileges   | Column privileges | Policies 
+--------+-------------+-------+----------------------+-------------------+----------
+ public | price_ticks | table | aditi=arwdDxtm/aditi+|                   | 
+        |             |       | r2_owner=ar/aditi   +|                   | 
+        |             |       | r2_analyst=r/aditi   |                   | 
+(1 row)
+
+                                  Access privileges
+ Schema |    Name     | Type  |  Access privileges   | Column privileges  | Policies 
+--------+-------------+-------+----------------------+--------------------+----------
+ public | alert_rules | table | aditi=arwdDxtm/aditi+| cooldown_seconds: +| 
+        |             |       | r2_owner=r/aditi     |   r2_owner=w/aditi+| 
+        |             |       |                      | is_active:        +| 
+        |             |       |                      |   r2_owner=w/aditi | 
+(1 row)
+
+                                            Access privileges
+ Schema  |         Name          | Type |     Access privileges      |    Column privileges    | Policies 
+---------+-----------------------+------+----------------------------+-------------------------+----------
+ review2 | v_active_alert_rules  | view | r2_owner=arwdDxtm/r2_owner+| cooldown_seconds:      +| 
+         |                       |      | r2_support=r/r2_owner      |   r2_support=w/r2_owner | 
+ review2 | v_instrument_activity | view | r2_owner=arwdDxtm/r2_owner+|                         | 
+         |                       |      | r2_analyst=r/r2_owner      |                         | 
+ review2 | v_watchlist_contents  | view | (null)                     |                         | 
+(3 rows)
+
+===== 9. Least privilege, tested by switching identity with SET ROLE =====
+SELECT max(observed_at) + interval '1 minute' AS t_feed
+FROM price_ticks WHERE instrument_id = 6 
+BEGIN;
+--- r2_analyst ---
+SET ROLE r2_analyst;
+SELECT current_user;
+ current_user 
+--------------
+ r2_analyst
+(1 row)
+
+allowed: aggregated view and market data
+SELECT symbol, ticks, alerts, active_rules FROM review2.v_instrument_activity ORDER BY symbol;
+  symbol  | ticks | alerts | active_rules 
+----------+-------+--------+--------------
+ BTCUSDT  |     8 |      2 |            1
+ ETHUSDT  |     2 |      1 |            1
+ HDFCBANK |     0 |      0 |            0
+ INFY     |     2 |      0 |            0
+ M&M      |     0 |      0 |            0
+ RELIANCE |    12 |      3 |            2
+ TCS      |     6 |      2 |            1
+(7 rows)
+
+SELECT count(*) AS price_ticks_visible FROM price_ticks;
+ price_ticks_visible 
+---------------------
+                  30
+(1 row)
+
+SAVEPOINT a;
+>>> EXPECTED ERROR [42501] analyst may not read users (emails)
+SELECT username, email FROM users;
+psql:sql/review2/17_security.sql:137: ERROR:  permission denied for table users
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT a;
+>>> EXPECTED ERROR [42501] analyst may not read alert rules
+SELECT * FROM alert_rules;
+psql:sql/review2/17_security.sql:141: ERROR:  permission denied for table alert_rules
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT a;
+>>> EXPECTED ERROR [42501] analyst may not insert ticks
+INSERT INTO price_ticks (instrument_id, observed_at, price, source, source_event_id)
+VALUES (1, now(), 1, 'MANUAL', 'r2-analyst-1');
+psql:sql/review2/17_security.sql:146: ERROR:  permission denied for table price_ticks
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT a;
+>>> EXPECTED ERROR [42501] analyst may not call the support procedure
+CALL review2.sp_set_rule_active(4, false);
+psql:sql/review2/17_security.sql:150: ERROR:  permission denied for procedure sp_set_rule_active
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT a;
+RESET ROLE;
+--- r2_support ---
+SET ROLE r2_support;
+SELECT current_user;
+ current_user 
+--------------
+ r2_support
+(1 row)
+
+allowed: read active rules through view V3 (rule 5 is inactive, so it is not visible)
+SELECT rule_id, direction, threshold, cooldown_seconds FROM review2.v_active_alert_rules ORDER BY rule_id;
+ rule_id | direction |    threshold    | cooldown_seconds 
+---------+-----------+-----------------+------------------
+       1 | ABOVE     |   3000.00000000 |              300
+       2 | BELOW     |   2800.00000000 |              300
+       3 | ABOVE     | 100000.00000000 |               60
+       4 | BELOW     |   3500.00000000 |                0
+       6 | BELOW     |   3000.00000000 |              120
+(5 rows)
+
+allowed: change a cooldown through V3
+UPDATE review2.v_active_alert_rules SET cooldown_seconds = 45 WHERE rule_id = 4
+RETURNING rule_id, cooldown_seconds;
+ rule_id | cooldown_seconds 
+---------+------------------
+       4 |               45
+(1 row)
+
+allowed: switch a rule off through the SECURITY DEFINER procedure (INOUT returns the previous state)
+CALL review2.sp_set_rule_active(3, false);
+psql:sql/review2/17_security.sql:164: NOTICE:  rule 3: is_active t -> f
+ p_previous 
+------------
+ t
+(1 row)
+
+SAVEPOINT s;
+>>> EXPECTED ERROR [42501] support may not bypass the view and read alert_rules directly
+SELECT * FROM alert_rules;
+psql:sql/review2/17_security.sql:167: ERROR:  permission denied for table alert_rules
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT s;
+>>> EXPECTED ERROR [42501] support may not update alert_rules directly
+UPDATE alert_rules SET cooldown_seconds = 1 WHERE rule_id = 4;
+psql:sql/review2/17_security.sql:171: ERROR:  permission denied for table alert_rules
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT s;
+>>> EXPECTED ERROR [42501] through V3 support may change only cooldown_seconds, not is_active
+UPDATE review2.v_active_alert_rules SET is_active = false WHERE rule_id = 4;
+psql:sql/review2/17_security.sql:175: ERROR:  permission denied for view v_active_alert_rules
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT s;
+>>> EXPECTED ERROR [42501] support may not read users
+SELECT email FROM users;
+psql:sql/review2/17_security.sql:179: ERROR:  permission denied for table users
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT s;
+RESET ROLE;
+--- r2_feed ---
+SET ROLE r2_feed;
+SELECT current_user;
+ current_user 
+--------------
+ r2_feed
+(1 row)
+
+allowed: ingest a BTCUSDT tick through the definer function
+SELECT * FROM review2.fn_feed_ingest('BINANCE', 'BTCUSDT', '2026-10-13 10:07:26+05:30'::timestamptz, 100500, 0.10, 'r2-feed-1');
+  status  | tick_id 
+----------+---------
+ INSERTED |      37
+(1 row)
+
+SAVEPOINT f;
+>>> EXPECTED ERROR [42501] the feed may not insert into price_ticks directly
+INSERT INTO price_ticks (instrument_id, observed_at, price, source, source_event_id)
+VALUES (6, now(), 100500, 'BINANCE', 'r2-feed-2');
+psql:sql/review2/17_security.sql:192: ERROR:  permission denied for table price_ticks
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT f;
+>>> EXPECTED ERROR [42501] the feed may not call ingest_tick by name (it needs table rights it does not have)
+SELECT * FROM ingest_tick('BINANCE', 'BTCUSDT', '2026-10-13 10:07:26+05:30'::timestamptz + interval '1 second', 100510, 0.10, 'BINANCE', 'r2-feed-3');
+psql:sql/review2/17_security.sql:196: ERROR:  permission denied for table instruments
+CONTEXT:  SQL statement "SELECT i.instrument_id, i.is_active
+                                          FROM instruments i
+    WHERE i.exchange = p_exchange
+      AND i.symbol   = p_symbol
+    FOR NO KEY UPDATE"
+PL/pgSQL function ingest_tick(text,text,timestamp with time zone,numeric,numeric,text,text) line 8 at SQL statement
+<<< actual SQLSTATE: 42501
+ROLLBACK TO SAVEPOINT f;
+RESET ROLE;
+what the allowed actions changed inside the transaction:
+SELECT rule_id, cooldown_seconds, is_active FROM alert_rules WHERE rule_id IN (3, 4) ORDER BY rule_id;
+ rule_id | cooldown_seconds | is_active 
+---------+------------------+-----------
+       3 |               60 | f
+       4 |               45 | t
+(2 rows)
+
+SELECT source, source_event_id, price FROM price_ticks WHERE source_event_id = 'r2-feed-1';
+ source  | source_event_id |      price      
+---------+-----------------+-----------------
+ BINANCE | r2-feed-1       | 100500.00000000
+(1 row)
+
+ROLLBACK;
+after ROLLBACK the demo changes are gone:
+SELECT rule_id, cooldown_seconds, is_active FROM alert_rules WHERE rule_id IN (3, 4) ORDER BY rule_id;
+ rule_id | cooldown_seconds | is_active 
+---------+------------------+-----------
+       3 |               60 | t
+       4 |                0 | t
+(2 rows)
+
+===== 10. REVOKE with before / after evidence =====
+before REVOKE:
+                                 Access privileges
+ Schema |    Name     | Type  |  Access privileges   | Column privileges | Policies 
+--------+-------------+-------+----------------------+-------------------+----------
+ public | price_ticks | table | aditi=arwdDxtm/aditi+|                   | 
+        |             |       | r2_owner=ar/aditi   +|                   | 
+        |             |       | r2_analyst=r/aditi   |                   | 
+(1 row)
+
+BEGIN;
+SET ROLE r2_analyst;
+SELECT count(*) AS ticks_visible_to_analyst FROM price_ticks;
+ ticks_visible_to_analyst 
+--------------------------
+                       30
+(1 row)
+
+ROLLBACK;
+REVOKE SELECT ON price_ticks FROM r2_analyst;
+after REVOKE SELECT ON price_ticks FROM r2_analyst:
+                                 Access privileges
+ Schema |    Name     | Type  |  Access privileges   | Column privileges | Policies 
+--------+-------------+-------+----------------------+-------------------+----------
+ public | price_ticks | table | aditi=arwdDxtm/aditi+|                   | 
+        |             |       | r2_owner=ar/aditi    |                   | 
+(1 row)
+
+BEGIN;
+SET ROLE r2_analyst;
+>>> EXPECTED ERROR [42501] the same query now fails
+SELECT count(*) AS ticks_visible_to_analyst FROM price_ticks;
+psql:sql/review2/17_security.sql:223: ERROR:  permission denied for table price_ticks
+<<< actual SQLSTATE: 42501
+ROLLBACK;
+the aggregated view still works, because it reads price_ticks with its OWNER rights:
+BEGIN;
+SET ROLE r2_analyst;
+SELECT symbol, ticks FROM review2.v_instrument_activity WHERE ticks > 0 ORDER BY symbol;
+  symbol  | ticks 
+----------+-------
+ BTCUSDT  |     8
+ ETHUSDT  |     2
+ INFY     |     2
+ RELIANCE |    12
+ TCS      |     6
+(5 rows)
+
+ROLLBACK;
+GRANT SELECT ON price_ticks TO r2_analyst;
+restored: GRANT SELECT ON price_ticks TO r2_analyst
+===== 11. Definer routines and their pinned search_path =====
+SELECT p.oid::regprocedure AS routine, p.prosecdef AS security_definer,
+       pg_get_userbyid(p.proowner) AS owner, p.proconfig AS settings
+FROM pg_proc p
+WHERE p.pronamespace = 'review2'::regnamespace AND p.prosecdef
+ORDER BY 1;
+                                     routine                                     | security_definer |  owner   |            settings             
+---------------------------------------------------------------------------------+------------------+----------+---------------------------------
+ review2.sp_set_rule_active(bigint,boolean,boolean)                              | t                | r2_owner | {"search_path=public, pg_temp"}
+ review2.fn_feed_ingest(text,text,timestamp with time zone,numeric,numeric,text) | t                | r2_owner | {"search_path=public, pg_temp"}
+(2 rows)
+

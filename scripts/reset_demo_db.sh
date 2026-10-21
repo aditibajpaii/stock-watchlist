@@ -13,7 +13,7 @@
 #                                functions, cursors, roles/grants)
 # Then prints the row counts and exits non-zero unless they match the clean
 # state. It only touches the one database named below: it never creates or
-# drops databases, and it runs no git commands.
+# drops databases.
 #
 # Same as the direct command:
 #   psql -q -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/00_schema.sql -f sql/01_seed.sql \

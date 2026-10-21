@@ -1,0 +1,44 @@
+===== Who is connected, and how was the connection authenticated? =====
+SELECT session_user, current_user, system_user AS authenticated_as,
+       (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS is_superuser;
+ session_user | current_user | authenticated_as | is_superuser 
+--------------+--------------+------------------+--------------
+ r2_analyst   | r2_analyst   | (null)           | f
+(1 row)
+
+===== Allowed: the aggregated view (no user data in it) =====
+SELECT symbol, ticks, alerts FROM review2.v_instrument_activity ORDER BY symbol;
+  symbol  | ticks | alerts 
+----------+-------+--------
+ BTCUSDT  |     8 |      2
+ ETHUSDT  |     2 |      1
+ HDFCBANK |     0 |      0
+ INFY     |     2 |      0
+ M&M      |     0 |      0
+ RELIANCE |    12 |      3
+ TCS      |     6 |      2
+(7 rows)
+
+>>> EXPECTED ERROR [42501] the users table (emails) is not readable
+SELECT username, email FROM users;
+psql:sql/review2/18_login_probe.sql:31: ERROR:  permission denied for table users
+<<< actual SQLSTATE: 42501
+>>> EXPECTED ERROR [42501] price ticks cannot be written directly
+INSERT INTO price_ticks (instrument_id, observed_at, price, source, source_event_id)
+VALUES (1, now(), 1, 'MANUAL', 'r2-probe-1');
+psql:sql/review2/18_login_probe.sql:36: ERROR:  permission denied for table price_ticks
+<<< actual SQLSTATE: 42501
+>>> EXPECTED ERROR [42501] the support procedure cannot be called
+CALL review2.sp_set_rule_active(4, false);
+psql:sql/review2/18_login_probe.sql:40: ERROR:  permission denied for procedure sp_set_rule_active
+<<< actual SQLSTATE: 42501
+>>> EXPECTED ERROR [42501] no privilege escalation: SET ROLE to a role it is not a member of
+SET ROLE r2_support;
+psql:sql/review2/18_login_probe.sql:44: ERROR:  permission denied to set role "r2_support"
+<<< actual SQLSTATE: 42501
+>>> EXPECTED ERROR [42501] no new tables in schema public (PostgreSQL 15+ default)
+CREATE TABLE public.r2_probe (x INT);
+psql:sql/review2/18_login_probe.sql:48: ERROR:  permission denied for schema public
+LINE 1: CREATE TABLE public.r2_probe (x INT);
+                     ^
+<<< actual SQLSTATE: 42501

@@ -1,0 +1,36 @@
+===== 1. Column mismatches (expect 0 rows) =====
+ tbl | col | problem | expected_type | live_type | expected_null | live_null | expected_default | live_default 
+-----+-----+---------+---------------+-----------+---------------+-----------+------------------+--------------
+
+===== 2. Constraint mismatches (expect 0 rows) =====
+ constraint_name | problem | expected_table | live_table | expected_def | live_def 
+-----------------+---------+----------------+------------+--------------+----------
+
+===== 3. Function / trigger / index mismatches (expect 0 rows) =====
+ kind | name | problem | expected_def | live_def 
+------+------+---------+--------------+----------
+
+===== 3b. Functions, triggers and non-constraint indexes present =====
+   kind   |               name                |                                                                                                   def                                                                                                    
+----------+-----------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ function | check_alert_event_instrument      | check_alert_event_instrument() RETURNS trigger
+ function | evaluate_price_alerts             | evaluate_price_alerts() RETURNS trigger
+ function | ingest_tick                       | ingest_tick(p_exchange text, p_symbol text, p_observed_at timestamp with time zone, p_price numeric, p_volume numeric, p_source text, p_source_event_id text) RETURNS TABLE(status text, tick_id bigint)
+ index    | ix_price_ticks_instrument_time    | CREATE INDEX ix_price_ticks_instrument_time ON public.price_ticks USING btree (instrument_id, observed_at DESC, tick_id DESC)
+ trigger  | trg_alert_events_check_instrument | CREATE TRIGGER trg_alert_events_check_instrument BEFORE INSERT OR UPDATE OF rule_id, tick_id ON public.alert_events FOR EACH ROW EXECUTE FUNCTION check_alert_event_instrument()
+ trigger  | trg_price_ticks_evaluate_alerts   | CREATE TRIGGER trg_price_ticks_evaluate_alerts AFTER INSERT ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION evaluate_price_alerts()
+
+===== 4. Relationships derived from foreign keys =====
+   parent    |      child      |              fk               |  fk_columns   | cardinality |       child_participation        | on_delete 
+-------------+-----------------+-------------------------------+---------------+-------------+----------------------------------+-----------
+ alert_rules | alert_events    | fk_alert_events_rule          | rule_id       | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+ instruments | alert_rules     | fk_alert_rules_instrument     | instrument_id | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ instruments | price_ticks     | fk_price_ticks_instrument     | instrument_id | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ instruments | watchlist_items | fk_watchlist_items_instrument | instrument_id | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ price_ticks | alert_events    | fk_alert_events_tick          | tick_id       | 1 : 0..N    | child must have exactly 1 parent | RESTRICT
+ users       | alert_rules     | fk_alert_rules_user           | user_id       | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+ users       | watchlists      | fk_watchlists_user            | user_id       | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+ watchlists  | watchlist_items | fk_watchlist_items_watchlist  | watchlist_id  | 1 : 0..N    | child must have exactly 1 parent | CASCADE
+
+psql:sql/verify_spec.sql:246: NOTICE:  columns checked: 37, constraints checked: 36, functions/triggers/indexes checked: 6
+psql:sql/verify_spec.sql:246: NOTICE:  LIVE SCHEMA MATCHES docs/SCHEMA_DESIGN.md (tables, constraints, functions/triggers, index)

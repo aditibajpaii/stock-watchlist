@@ -1,0 +1,138 @@
+CREATE OR REPLACE VIEW review2.v_watchlist_contents AS
+SELECT u.username,
+       w.name        AS watchlist,
+       i.exchange,
+       i.symbol,
+       i.name        AS instrument_name,
+       wi.added_at,
+       lt.price      AS latest_price,
+       lt.observed_at AS latest_price_at
+FROM users u
+JOIN watchlists w       ON w.user_id = u.user_id
+JOIN watchlist_items wi ON wi.watchlist_id = w.watchlist_id
+JOIN instruments i      ON i.instrument_id = wi.instrument_id
+LEFT JOIN LATERAL (SELECT t.price, t.observed_at
+                   FROM price_ticks t
+                   WHERE t.instrument_id = i.instrument_id
+                   ORDER BY t.observed_at DESC, t.tick_id DESC
+                   LIMIT 1) AS lt ON true;
+COMMENT ON VIEW review2.v_watchlist_contents IS
+    'V1: what each watchlist contains, with the latest price (users, watchlists, watchlist_items, instruments, price_ticks).';
+CREATE OR REPLACE VIEW review2.v_instrument_activity AS
+SELECT i.instrument_id, i.exchange, i.symbol,
+       count(t.tick_id)       AS ticks,
+       min(t.price)           AS min_price,
+       max(t.price)           AS max_price,
+       round(avg(t.price), 2) AS avg_price,
+       count(t.tick_id) - count(t.volume) AS ticks_volume_unknown,
+       (SELECT count(*) FROM alert_events e JOIN price_ticks p ON p.tick_id = e.tick_id
+         WHERE p.instrument_id = i.instrument_id)                      AS alerts,
+       (SELECT count(*) FROM alert_rules r
+         WHERE r.instrument_id = i.instrument_id AND r.is_active)       AS active_rules
+FROM instruments i
+LEFT JOIN price_ticks t ON t.instrument_id = i.instrument_id
+GROUP BY i.instrument_id, i.exchange, i.symbol;
+COMMENT ON VIEW review2.v_instrument_activity IS
+    'V2: per-instrument market activity (aggregated). Contains no user data.';
+CREATE OR REPLACE VIEW review2.v_active_alert_rules AS
+SELECT rule_id, user_id, instrument_id, direction, threshold, cooldown_seconds, is_active
+FROM alert_rules
+WHERE is_active
+WITH CASCADED CHECK OPTION;
+COMMENT ON VIEW review2.v_active_alert_rules IS
+    'V3: only ACTIVE rules (row restriction). Updatable; CHECK OPTION stops an update from moving a row out of the view.';
+=== V1 query: what does kavya "Main" contain, and at what latest price?
+SELECT watchlist, symbol, instrument_name, latest_price
+FROM review2.v_watchlist_contents
+WHERE username = 'kavya'
+ORDER BY symbol;
+ watchlist |  symbol  |     instrument_name     |  latest_price   
+-----------+----------+-------------------------+-----------------
+ Main      | BTCUSDT  | Bitcoin / Tether        | 100400.00000000
+ Main      | INFY     | Infosys Ltd             |   1612.00000000
+ Main      | RELIANCE | Reliance Industries Ltd |   2788.00000000
+(3 rows)
+
+=== V2 query: instruments with at least one alert, busiest first
+SELECT exchange, symbol, ticks, min_price, max_price, avg_price, alerts, active_rules
+FROM review2.v_instrument_activity
+WHERE alerts > 0
+ORDER BY alerts DESC, symbol;
+ exchange |  symbol  | ticks |   min_price    |    max_price    | avg_price | alerts | active_rules 
+----------+----------+-------+----------------+-----------------+-----------+--------+--------------
+ NSE      | RELIANCE |    12 |  2788.00000000 |   3030.00000000 |   2968.26 |      3 |            2
+ BINANCE  | BTCUSDT  |     8 | 99450.00000000 | 100400.00000000 |  99991.25 |      2 |            1
+ NSE      | TCS      |     6 |  3485.50000000 |   3552.00000000 |   3511.46 |      2 |            1
+ BINANCE  | ETHUSDT  |     2 |  2994.60000000 |   3048.10000000 |   3021.35 |      1 |            1
+(4 rows)
+
+=== V3 query: the active rules (rule 5, which is inactive, is not visible)
+SELECT * FROM review2.v_active_alert_rules ORDER BY rule_id;
+ rule_id | user_id | instrument_id | direction |    threshold    | cooldown_seconds | is_active 
+---------+---------+---------------+-----------+-----------------+------------------+-----------
+       1 |       1 |             1 | ABOVE     |   3000.00000000 |              300 | t
+       2 |       1 |             1 | BELOW     |   2800.00000000 |              300 | t
+       3 |       1 |             6 | ABOVE     | 100000.00000000 |               60 | t
+       4 |       2 |             2 | BELOW     |   3500.00000000 |                0 | t
+       6 |       3 |             7 | BELOW     |   3000.00000000 |              120 | t
+(5 rows)
+
+===== Which views are updatable? (information_schema, decided by PostgreSQL) =====
+SELECT table_name AS view_name, is_updatable, is_insertable_into, check_option
+FROM information_schema.views
+WHERE table_schema = 'review2'
+ORDER BY table_name;
+       view_name       | is_updatable | is_insertable_into | check_option 
+-----------------------+--------------+--------------------+--------------
+ v_active_alert_rules  | YES          | YES                | CASCADED
+ v_instrument_activity | NO           | NO                 | NONE
+ v_watchlist_contents  | NO           | NO                 | NONE
+(3 rows)
+
+===== Updating THROUGH the view V3 (inside a transaction, rolled back) =====
+BEGIN;
+before: rule 4 cooldown
+SELECT rule_id, cooldown_seconds FROM alert_rules WHERE rule_id = 4;
+ rule_id | cooldown_seconds 
+---------+------------------
+       4 |                0
+(1 row)
+
+UPDATE review2.v_active_alert_rules SET cooldown_seconds = 30 WHERE rule_id = 4
+RETURNING rule_id, cooldown_seconds;
+ rule_id | cooldown_seconds 
+---------+------------------
+       4 |               30
+(1 row)
+
+after: the base table alert_rules changed, because V3 is a simple updatable view
+SELECT rule_id, cooldown_seconds FROM alert_rules WHERE rule_id = 4;
+ rule_id | cooldown_seconds 
+---------+------------------
+       4 |               30
+(1 row)
+
+rule 5 is invisible through V3, so an UPDATE through V3 cannot reach it:
+UPDATE review2.v_active_alert_rules SET cooldown_seconds = 30 WHERE rule_id = 5;
+rows updated: 0
+SAVEPOINT before_check_option;
+>>> EXPECTED ERROR [44000] CHECK OPTION: setting is_active = false would move the row out of the view
+UPDATE review2.v_active_alert_rules SET is_active = false WHERE rule_id = 4;
+psql:sql/review2/12_views.sql:102: ERROR:  new row violates check option for view "v_active_alert_rules"
+DETAIL:  Failing row contains (4, 2, 2, BELOW, 3500.00000000, 30, f, 2026-10-13 10:03:36.119478+05:30).
+<<< actual SQLSTATE: 44000
+ROLLBACK TO SAVEPOINT before_check_option;
+>>> EXPECTED ERROR [55000] V2 is aggregated, so it is not updatable
+UPDATE review2.v_instrument_activity SET ticks = 0 WHERE symbol = 'TCS';
+psql:sql/review2/12_views.sql:106: ERROR:  cannot update view "v_instrument_activity"
+DETAIL:  Views containing GROUP BY are not automatically updatable.
+HINT:  To enable updating the view, provide an INSTEAD OF UPDATE trigger or an unconditional ON UPDATE DO INSTEAD rule.
+<<< actual SQLSTATE: 55000
+ROLLBACK;
+===== After ROLLBACK: rule 4 cooldown is back to its seed value 0 =====
+SELECT rule_id, cooldown_seconds, is_active FROM alert_rules WHERE rule_id = 4;
+ rule_id | cooldown_seconds | is_active 
+---------+------------------+-----------
+       4 |                0 | t
+(1 row)
+

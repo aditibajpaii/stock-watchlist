@@ -1,22 +1,3 @@
--- =====================================================================
--- 04_alert_tests.sql
--- Executable tests for ingest_tick, the alert trigger and the
--- alert_events integrity trigger.
---
--- Prerequisite: 00_schema.sql, 01_seed.sql, 03_functions_triggers.sql
--- Run:  psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/04_alert_tests.sql
---
--- Seed data is untouched:
---   * Part 1 (top-level ROLLBACK test) creates its own fixtures and rolls
---     them back.
---   * Part 2 creates its own test users/instruments/rules inside one
---     transaction that is ROLLED BACK at the end.
--- Every test compares an exact expected value with the actual value.
--- Ticks use fixed market times (base 2026-01-05 09:15:00 IST + N s) on
--- dedicated test instruments, so existing data cannot affect results.
--- Concurrency and NOTIFY delivery need several sessions:
--- see tests/concurrency_test.sh.
--- =====================================================================
 
 \set QUIET on
 \pset footer off

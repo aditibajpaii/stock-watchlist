@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 08_inspect_live.sql
--- Small READ-ONLY "DB inspector" for demos and viva: proves the ticks
+-- Small READ-ONLY "DB inspector" for demos: proves the ticks
 -- and alerts shown in the web UI are really stored in PostgreSQL.
 --
 -- Shows: row counts, ticks per source, latest 10 price_ticks, latest

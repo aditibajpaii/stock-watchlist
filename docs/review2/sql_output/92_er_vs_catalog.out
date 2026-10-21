@@ -1,0 +1,33 @@
+Diagram 1 (conceptual ER) compared with the PostgreSQL catalog of database stock_watchlist_review2_sandbox
+   OK       USER         attributes = users columns without FK columns: ['created_at', 'email', 'user_id', 'username']
+   OK       WATCHLIST    attributes = watchlists columns without FK columns: ['created_at', 'name', 'watchlist_id']
+   OK       INSTRUMENT   attributes = instruments columns without FK columns: ['exchange', 'instrument_id', 'is_active', 'name', 'quote_currency', 'symbol']
+   OK       ALERT_RULE   attributes = alert_rules columns without FK columns: ['cooldown_seconds', 'created_at', 'direction', 'is_active', 'rule_id', 'threshold']
+   OK       ALERT_EVENT  attributes = alert_events columns without FK columns: ['event_id', 'fired_at']
+   OK       PRICE_TICK   attributes = price_ticks columns without FK columns: ['ingested_at', 'observed_at', 'price', 'source', 'source_event_id', 'tick_id', 'volume']
+   OK       CONTAINS     attributes = watchlist_items columns without FK columns: ['added_at']
+   OK       8 relationships lines cover all 8 foreign keys exactly once
+   OK       OWNS         USER 1 : N WATCHLIST (FK watchlists.user_id not unique alone); WATCHLIST total = FK NOT NULL (True); USER partial
+   OK       CREATES      USER 1 : N ALERT_RULE (FK alert_rules.user_id not unique alone); ALERT_RULE total = FK NOT NULL (True); USER partial
+   OK       CONTAINS is M:N: watchlist_items PK = (watchlist_id, instrument_id) = its two FKs; both sides partial
+   OK       MONITORS     INSTRUMENT 1 : N ALERT_RULE (FK alert_rules.instrument_id not unique alone); ALERT_RULE total = FK NOT NULL (True); INSTRUMENT partial
+   OK       GENERATES    ALERT_RULE 1 : N ALERT_EVENT (FK alert_events.rule_id not unique alone); ALERT_EVENT total = FK NOT NULL (True); ALERT_RULE partial
+   OK       HAS_TICK     INSTRUMENT 1 : N PRICE_TICK (FK price_ticks.instrument_id not unique alone); PRICE_TICK total = FK NOT NULL (True); INSTRUMENT partial
+   OK       TRIGGERED_BY PRICE_TICK 1 : N ALERT_EVENT (FK alert_events.tick_id not unique alone); ALERT_EVENT total = FK NOT NULL (True); PRICE_TICK partial
+   OK       USER         underlined keys ['email', 'user_id', 'username'] = single-column PK/UNIQUE ['email', 'user_id', 'username']
+   OK       WATCHLIST    underlined keys ['watchlist_id'] = single-column PK/UNIQUE ['watchlist_id']
+   OK       INSTRUMENT   underlined keys ['instrument_id'] = single-column PK/UNIQUE ['instrument_id']
+   OK       ALERT_RULE   underlined keys ['rule_id'] = single-column PK/UNIQUE ['rule_id']
+   OK       ALERT_EVENT  underlined keys ['event_id'] = single-column PK/UNIQUE ['event_id']
+   OK       PRICE_TICK   underlined keys ['tick_id'] = single-column PK/UNIQUE ['tick_id']
+   OK       INSTRUMENT composite key listing = UNIQUE (exchange, symbol)
+   OK       Keys legend: watchlists (name, user_id) is a declared UNIQUE constraint
+   OK       Keys legend: price_ticks (instrument_id, source, source_event_id) is a declared UNIQUE constraint
+   OK       Keys legend: alert_rules (direction, instrument_id, threshold, user_id) is a declared UNIQUE constraint
+   OK       Keys legend: alert_events (rule_id, tick_id) is a declared UNIQUE constraint
+   OK       7 tables = 6 entity types + 1 M:N relationship (CONTAINS); catalog has 7: alert_events, alert_rules, instruments, price_ticks, users, watchlist_items, watchlists
+   OK       8 foreign keys = 6 one-to-many relationships x 1 FK + 1 many-to-many relationship x 2 FKs
+   OK       all 14 PRIMARY KEY/UNIQUE constraints are expressed by the diagram (underlined: 8, composite attribute: 1, Keys legend: 4, M:N relationship: 1)
+   OK       no trigger on a parent table can reject a row: trg_price_ticks_evaluate_alerts on price_ticks (function evaluate_price_alerts contains no RAISE: it only creates alert events, conditionally) -> every 'one' side and both CONTAINS sides are partial
+   OK       data also shows childless parents: instruments without price_ticks (HAS_TICK) = 2; instruments without alert_rules (MONITORS) = 2; alert_rules without alert_events (GENERATES) = 1; price_ticks without alert_events (TRIGGERED_BY) = 22 (users without watchlists or rules and empty watchlists occur in the committed DML and transaction demos, 02_dml.out and 16_transactions.out)
+RESULT: diagram matches the catalog

@@ -1,0 +1,93 @@
+=== AG01 | COUNT, GROUP BY, ORDER BY | How many price ticks does each instrument have?
+SELECT i.symbol, count(*) AS ticks
+FROM price_ticks t
+JOIN instruments i ON i.instrument_id = t.instrument_id
+GROUP BY i.symbol
+ORDER BY ticks DESC, i.symbol;
+  symbol  | ticks 
+----------+-------
+ RELIANCE |    12
+ BTCUSDT  |     8
+ TCS      |     6
+ ETHUSDT  |     2
+ INFY     |     2
+(5 rows)
+
+=== AG02 | MIN, MAX, AVG, GROUP BY | What was the lowest, highest and average price of each instrument?
+SELECT i.symbol,
+       min(t.price)           AS min_price,
+       max(t.price)           AS max_price,
+       round(avg(t.price), 2) AS avg_price
+FROM price_ticks t
+JOIN instruments i ON i.instrument_id = t.instrument_id
+GROUP BY i.symbol
+ORDER BY i.symbol;
+  symbol  |   min_price    |    max_price    | avg_price 
+----------+----------------+-----------------+-----------
+ BTCUSDT  | 99450.00000000 | 100400.00000000 |  99991.25
+ ETHUSDT  |  2994.60000000 |   3048.10000000 |   3021.35
+ INFY     |  1585.00000000 |   1612.00000000 |   1598.50
+ RELIANCE |  2788.00000000 |   3030.00000000 |   2968.26
+ TCS      |  3485.50000000 |   3552.00000000 |   3511.46
+(5 rows)
+
+=== AG03 | SUM, COUNT, GROUP BY | How much volume is known per instrument, and how many ticks had unknown volume?
+SELECT i.symbol,
+       sum(t.volume)               AS known_volume,      -- SUM ignores NULLs
+       count(t.volume)             AS ticks_with_volume, -- COUNT(column) skips NULLs
+       count(*) - count(t.volume)  AS ticks_volume_unknown
+FROM price_ticks t
+JOIN instruments i ON i.instrument_id = t.instrument_id
+GROUP BY i.symbol
+ORDER BY i.symbol;
+  symbol  |  known_volume  | ticks_with_volume | ticks_volume_unknown 
+----------+----------------+-------------------+----------------------
+ BTCUSDT  |     2.40000000 |                 6 |                    2
+ ETHUSDT  |     2.50000000 |                 1 |                    1
+ INFY     |   850.00000000 |                 2 |                    0
+ RELIANCE | 10100.00000000 |                 8 |                    4
+ TCS      |  4150.00000000 |                 5 |                    1
+(5 rows)
+
+=== AG04 | COUNT, GROUP BY, HAVING, WHERE vs HAVING | Which users have more than one ACTIVE alert rule?
+SELECT u.username, count(*) AS active_rules
+FROM alert_rules r
+JOIN users u ON u.user_id = r.user_id
+WHERE r.is_active
+GROUP BY u.username
+HAVING count(*) > 1
+ORDER BY u.username;
+ username | active_rules 
+----------+--------------
+ arjun    |            3
+(1 row)
+
+=== AG05 | COUNT, GROUP BY, HAVING | Same question without the WHERE filter: which users have more than one rule of any status?
+SELECT u.username, count(*) AS rules_any_status
+FROM alert_rules r
+JOIN users u ON u.user_id = r.user_id
+GROUP BY u.username
+HAVING count(*) > 1
+ORDER BY u.username;
+ username | rules_any_status 
+----------+------------------
+ arjun    |                3
+ priya    |                2
+(2 rows)
+
+=== AG06 | COUNT, GROUP BY | How many distinct instruments does each user watch across all of their watchlists?
+SELECT u.username,
+       count(DISTINCT w.watchlist_id)   AS watchlists,
+       count(DISTINCT wi.instrument_id) AS distinct_instruments
+FROM users u
+JOIN watchlists w       ON w.user_id = u.user_id
+JOIN watchlist_items wi ON wi.watchlist_id = w.watchlist_id
+GROUP BY u.username
+ORDER BY u.username;
+ username | watchlists | distinct_instruments 
+----------+------------+----------------------
+ arjun    |          2 |                    5
+ kavya    |          1 |                    3
+ priya    |          2 |                    3
+(3 rows)
+

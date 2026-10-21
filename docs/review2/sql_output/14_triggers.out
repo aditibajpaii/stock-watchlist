@@ -1,0 +1,90 @@
+===== Triggers on the 7 tables (catalog) =====
+SELECT c.relname AS table_name, t.tgname AS trigger_name,
+       pg_get_triggerdef(t.oid) AS definition
+FROM pg_trigger t
+JOIN pg_class c ON c.oid = t.tgrelid
+WHERE NOT t.tgisinternal
+  AND c.relnamespace = 'public'::regnamespace
+ORDER BY c.relname, t.tgname;
+  table_name  |           trigger_name            |                                                                                    definition                                                                                    
+--------------+-----------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ alert_events | trg_alert_events_check_instrument | CREATE TRIGGER trg_alert_events_check_instrument BEFORE INSERT OR UPDATE OF rule_id, tick_id ON public.alert_events FOR EACH ROW EXECUTE FUNCTION check_alert_event_instrument()
+ price_ticks  | trg_price_ticks_evaluate_alerts   | CREATE TRIGGER trg_price_ticks_evaluate_alerts AFTER INSERT ON public.price_ticks FOR EACH ROW EXECUTE FUNCTION evaluate_price_alerts()
+(2 rows)
+
+BEGIN;
+CREATE TEMP VIEW reliance_rule_events AS
+SELECT e.event_id, e.rule_id, r.direction, r.threshold, t.price AS tick_price, t.source_event_id
+FROM alert_events e
+JOIN alert_rules r ON r.rule_id = e.rule_id
+JOIN price_ticks t ON t.tick_id = e.tick_id
+WHERE r.instrument_id = 1
+ORDER BY e.event_id;
+===== T1: alert trigger =====
+RELIANCE now: latest price 2788.00 (below arjun ABOVE 3000), last rule-1 alert at replay +400 s, cooldown 300 s
+SELECT * FROM reliance_rule_events;
+ event_id | rule_id | direction |   threshold   |  tick_price   | source_event_id 
+----------+---------+-----------+---------------+---------------+-----------------
+        1 |       1 | ABOVE     | 3000.00000000 | 3002.40000000 | r2demo:000006
+        7 |       1 | ABOVE     | 3000.00000000 | 3021.50000000 | r2demo:000027
+        8 |       2 | BELOW     | 2800.00000000 | 2795.00000000 | r2demo:000029
+(3 rows)
+
+SELECT max(observed_at) + interval '5 minutes' AS t_new
+FROM price_ticks WHERE instrument_id = 1 
+insert 3010.00 through the official path ingest_tick(): 2788 -> 3010 crosses ABOVE 3000
+SELECT * FROM ingest_tick('NSE', 'RELIANCE', '2026-10-13 10:16:16+05:30'::timestamptz, 3010.00, 500, 'MANUAL', 'r2-trigger-1');
+  status  | tick_id 
+----------+---------
+ INSERTED |      34
+(1 row)
+
+the AFTER INSERT trigger recorded exactly one new event (rule 1), inside the same transaction:
+SELECT * FROM reliance_rule_events;
+ event_id | rule_id | direction |   threshold   |  tick_price   | source_event_id 
+----------+---------+-----------+---------------+---------------+-----------------
+        1 |       1 | ABOVE     | 3000.00000000 | 3002.40000000 | r2demo:000006
+        7 |       1 | ABOVE     | 3000.00000000 | 3021.50000000 | r2demo:000027
+        8 |       2 | BELOW     | 2800.00000000 | 2795.00000000 | r2demo:000029
+       10 |       1 | ABOVE     | 3000.00000000 | 3010.00000000 | r2-trigger-1
+(4 rows)
+
+insert 3025.00 one second later: the price STAYS above 3000, so no new event (edge-triggered)
+SELECT * FROM ingest_tick('NSE', 'RELIANCE', '2026-10-13 10:16:16+05:30'::timestamptz + interval '1 second', 3025.00, 500, 'MANUAL', 'r2-trigger-2');
+  status  | tick_id 
+----------+---------
+ INSERTED |      35
+(1 row)
+
+SELECT count(*) AS reliance_events_now FROM reliance_rule_events;
+ reliance_events_now 
+---------------------
+                   4
+(1 row)
+
+===== T2: integrity trigger (rule and tick must be the same instrument) =====
+SAVEPOINT before_t2;
+>>> EXPECTED ERROR [23514] rule 1 is for RELIANCE, tick 2 is a TCS tick
+INSERT INTO alert_events (rule_id, tick_id) VALUES (1, 2);
+psql:sql/review2/14_triggers.sql:55: ERROR:  alert_events: rule 1 is for instrument 1, but tick 2 is for instrument 2
+HINT:  An alert event must pair a rule and a price tick of the same instrument.
+CONTEXT:  PL/pgSQL function check_alert_event_instrument() line 16 at RAISE
+<<< actual SQLSTATE: 23514
+ROLLBACK TO SAVEPOINT before_t2;
+a matching pair is accepted by the same trigger (rule 1 + RELIANCE tick 8):
+INSERT INTO alert_events (rule_id, tick_id) VALUES (1, 8)
+RETURNING event_id, rule_id, tick_id;
+ event_id | rule_id | tick_id 
+----------+---------+---------
+       12 |       1 |       8
+(1 row)
+
+ROLLBACK;
+===== After ROLLBACK: the trigger effects disappeared together with the ticks =====
+SELECT (SELECT count(*) FROM price_ticks)  AS price_ticks,
+       (SELECT count(*) FROM alert_events) AS alert_events;
+ price_ticks | alert_events 
+-------------+--------------
+          30 |            8
+(1 row)
+

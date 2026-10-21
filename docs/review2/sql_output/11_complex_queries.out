@@ -1,0 +1,287 @@
+=== CQ01 | 3 tables, aggregate | Which users have the most alert rules, how many are active, and how many alerts did they receive?
+SELECT u.username,
+       count(DISTINCT r.rule_id)                            AS rules,
+       count(DISTINCT r.rule_id) FILTER (WHERE r.is_active) AS active_rules,
+       count(e.event_id)                                    AS alerts_received
+FROM users u
+JOIN alert_rules r       ON r.user_id = u.user_id
+LEFT JOIN alert_events e ON e.rule_id = r.rule_id
+GROUP BY u.username
+ORDER BY rules DESC, alerts_received DESC, u.username;
+ username | rules | active_rules | alerts_received 
+----------+-------+--------------+-----------------
+ arjun    |     3 |            3 |               5
+ priya    |     2 |            1 |               2
+ kavya    |     1 |            1 |               1
+(3 rows)
+
+=== CQ02 | 5 tables, CTE, window RANK | Which instrument moved the most (first to last tick), and which watchlists hold it?
+WITH moves AS (
+    SELECT t.instrument_id,
+           (array_agg(t.price ORDER BY t.observed_at, t.tick_id))[1]           AS first_price,
+           (array_agg(t.price ORDER BY t.observed_at DESC, t.tick_id DESC))[1] AS last_price
+    FROM price_ticks t
+    GROUP BY t.instrument_id
+), ranked AS (
+    SELECT m.*,
+           rank() OVER (ORDER BY abs(m.last_price - m.first_price) / m.first_price DESC) AS move_rank
+    FROM moves m
+)
+SELECT i.symbol,
+       round(r.first_price, 2) AS first_price,
+       round(r.last_price, 2)  AS last_price,
+       round(100 * (r.last_price - r.first_price) / r.first_price, 2) AS change_pct,
+       u.username, w.name AS watchlist
+FROM ranked r
+JOIN instruments i      ON i.instrument_id = r.instrument_id
+JOIN watchlist_items wi ON wi.instrument_id = r.instrument_id
+JOIN watchlists w       ON w.watchlist_id = wi.watchlist_id
+JOIN users u            ON u.user_id = w.user_id
+WHERE r.move_rank = 1
+ORDER BY u.username, w.name;
+  symbol  | first_price | last_price | change_pct | username | watchlist 
+----------+-------------+------------+------------+----------+-----------
+ RELIANCE |     2985.50 |    2788.00 |      -6.62 | arjun    | Long Term
+ RELIANCE |     2985.50 |    2788.00 |      -6.62 | kavya    | Main
+(2 rows)
+
+=== CQ03 | 6 tables, aggregate | Which watchlists contain instruments that triggered alerts, and how many alerts were there?
+SELECT u.username, w.name AS watchlist,
+       count(DISTINCT t.instrument_id) AS instruments_with_alerts,
+       count(e.event_id)               AS alerts_on_those_instruments,
+       string_agg(DISTINCT i.symbol, ', ' ORDER BY i.symbol) AS symbols
+FROM watchlists w
+JOIN users u            ON u.user_id = w.user_id
+JOIN watchlist_items wi ON wi.watchlist_id = w.watchlist_id
+JOIN instruments i      ON i.instrument_id = wi.instrument_id
+JOIN price_ticks t      ON t.instrument_id = wi.instrument_id
+JOIN alert_events e     ON e.tick_id = t.tick_id
+GROUP BY u.username, w.name
+ORDER BY alerts_on_those_instruments DESC, u.username, w.name;
+ username | watchlist | instruments_with_alerts | alerts_on_those_instruments |      symbols      
+----------+-----------+-------------------------+-----------------------------+-------------------
+ arjun    | Long Term |                       2 |                           5 | RELIANCE, TCS
+ kavya    | Main      |                       2 |                           5 | BTCUSDT, RELIANCE
+ arjun    | Crypto    |                       2 |                           3 | BTCUSDT, ETHUSDT
+ priya    | Tech      |                       1 |                           2 | TCS
+(4 rows)
+
+=== CQ04 | 5 tables, window LAG, HAVING | Which rules produced repeated alerts, and did the gap between alerts always respect the cooldown?
+WITH ev AS (
+    SELECT e.rule_id,
+           t.observed_at - lag(t.observed_at) OVER (PARTITION BY e.rule_id
+                                                    ORDER BY t.observed_at, t.tick_id) AS gap
+    FROM alert_events e
+    JOIN price_ticks t ON t.tick_id = e.tick_id
+)
+SELECT r.rule_id, u.username, i.symbol, r.direction, r.threshold, r.cooldown_seconds,
+       count(*)                                  AS events,
+       min(extract(epoch FROM ev.gap))::int      AS smallest_gap_s,
+       bool_and(ev.gap IS NULL
+                OR ev.gap >= make_interval(secs => r.cooldown_seconds)) AS cooldown_respected
+FROM ev
+JOIN alert_rules r ON r.rule_id = ev.rule_id
+JOIN users u       ON u.user_id = r.user_id
+JOIN instruments i ON i.instrument_id = r.instrument_id
+GROUP BY r.rule_id, u.username, i.symbol, r.direction, r.threshold, r.cooldown_seconds
+HAVING count(*) > 1
+ORDER BY r.rule_id;
+ rule_id | username |  symbol  | direction |    threshold    | cooldown_seconds | events | smallest_gap_s | cooldown_respected 
+---------+----------+----------+-----------+-----------------+------------------+--------+----------------+--------------------
+       1 | arjun    | RELIANCE | ABOVE     |   3000.00000000 |              300 |      2 |            380 | t
+       3 | arjun    | BTCUSDT  | ABOVE     | 100000.00000000 |               60 |      2 |            130 | t
+       4 | priya    | TCS      | BELOW     |   3500.00000000 |                0 |      2 |             95 | t
+(3 rows)
+
+=== CQ05 | 3 tables, EXISTS / NOT EXISTS | Which instruments have price data but no active alert rule?
+SELECT i.symbol, i.name,
+       (SELECT count(*) FROM price_ticks t
+         WHERE t.instrument_id = i.instrument_id)                        AS ticks,
+       (SELECT count(*) FROM alert_rules r
+         WHERE r.instrument_id = i.instrument_id AND NOT r.is_active)    AS inactive_rules
+FROM instruments i
+WHERE EXISTS     (SELECT 1 FROM price_ticks t WHERE t.instrument_id = i.instrument_id)
+  AND NOT EXISTS (SELECT 1 FROM alert_rules r
+                  WHERE r.instrument_id = i.instrument_id AND r.is_active)
+ORDER BY i.symbol;
+ symbol |    name     | ticks | inactive_rules 
+--------+-------------+-------+----------------
+ INFY   | Infosys Ltd |     2 |              1
+(1 row)
+
+=== CQ06 | 4 tables, LATERAL | Which active rules can fire on the next crossing, and how far is the latest price from each threshold?
+SELECT r.rule_id, u.username, i.symbol, r.direction, r.threshold,
+       lp.price AS latest_price,
+       CASE WHEN (r.direction = 'ABOVE' AND lp.price < r.threshold)
+              OR (r.direction = 'BELOW' AND lp.price > r.threshold)
+            THEN 'armed: can fire on next crossing'
+            ELSE 'past threshold: must move back first' END AS state,
+       round(100 * abs(r.threshold - lp.price) / lp.price, 2) AS distance_pct
+FROM alert_rules r
+JOIN users u       ON u.user_id = r.user_id
+JOIN instruments i ON i.instrument_id = r.instrument_id
+JOIN LATERAL (SELECT t.price
+              FROM price_ticks t
+              WHERE t.instrument_id = r.instrument_id
+              ORDER BY t.observed_at DESC, t.tick_id DESC
+              LIMIT 1) AS lp ON true
+WHERE r.is_active
+ORDER BY state, distance_pct;
+ rule_id | username |  symbol  | direction |    threshold    |  latest_price   |                state                 | distance_pct 
+---------+----------+----------+-----------+-----------------+-----------------+--------------------------------------+--------------
+       1 | arjun    | RELIANCE | ABOVE     |   3000.00000000 |   2788.00000000 | armed: can fire on next crossing     |         7.60
+       6 | kavya    | ETHUSDT  | BELOW     |   3000.00000000 |   2994.60000000 | past threshold: must move back first |         0.18
+       4 | priya    | TCS      | BELOW     |   3500.00000000 |   3490.00000000 | past threshold: must move back first |         0.29
+       3 | arjun    | BTCUSDT  | ABOVE     | 100000.00000000 | 100400.00000000 | past threshold: must move back first |         0.40
+       2 | arjun    | RELIANCE | BELOW     |   2800.00000000 |   2788.00000000 | past threshold: must move back first |         0.43
+(5 rows)
+
+=== CQ07 | 5 tables, derived table, scalar subqueries | Give a per-instrument activity dashboard: ticks, price range, alerts and watching users
+SELECT i.exchange, i.symbol,
+       coalesce(ts.ticks, 0)  AS ticks,
+       round(ts.min_price, 2) AS min_price,
+       round(ts.max_price, 2) AS max_price,
+       (SELECT count(*)
+          FROM alert_events e JOIN price_ticks t ON t.tick_id = e.tick_id
+         WHERE t.instrument_id = i.instrument_id)           AS alerts,
+       (SELECT count(DISTINCT w.user_id)
+          FROM watchlist_items wi JOIN watchlists w ON w.watchlist_id = wi.watchlist_id
+         WHERE wi.instrument_id = i.instrument_id)          AS watching_users
+FROM instruments i
+LEFT JOIN (SELECT instrument_id, count(*) AS ticks,
+                  min(price) AS min_price, max(price) AS max_price
+           FROM price_ticks
+           GROUP BY instrument_id) AS ts ON ts.instrument_id = i.instrument_id
+ORDER BY ticks DESC, i.symbol;
+ exchange |  symbol  | ticks | min_price | max_price | alerts | watching_users 
+----------+----------+-------+-----------+-----------+--------+----------------
+ NSE      | RELIANCE |    12 |   2788.00 |   3030.00 |      3 |              2
+ BINANCE  | BTCUSDT  |     8 |  99450.00 | 100400.00 |      2 |              2
+ NSE      | TCS      |     6 |   3485.50 |   3552.00 |      2 |              2
+ BINANCE  | ETHUSDT  |     2 |   2994.60 |   3048.10 |      1 |              1
+ NSE      | INFY     |     2 |   1585.00 |   1612.00 |      0 |              2
+ NSE      | HDFCBANK |     0 |    (null) |    (null) |      0 |              1
+ NSE      | M&M      |     0 |    (null) |    (null) |      0 |              1
+(7 rows)
+
+=== CQ08 | 7 tables, NOT EXISTS | Which users received an alert for an instrument that is not on any of their own watchlists?
+SELECT u.username, i.symbol, r.direction, r.threshold, e.event_id, t.price AS tick_price
+FROM alert_events e
+JOIN alert_rules r ON r.rule_id = e.rule_id
+JOIN users u       ON u.user_id = r.user_id
+JOIN price_ticks t ON t.tick_id = e.tick_id
+JOIN instruments i ON i.instrument_id = t.instrument_id
+WHERE NOT EXISTS (SELECT 1
+                  FROM watchlists w
+                  JOIN watchlist_items wi ON wi.watchlist_id = w.watchlist_id
+                  WHERE w.user_id = r.user_id
+                    AND wi.instrument_id = t.instrument_id)
+ORDER BY e.event_id;
+ username | symbol  | direction |   threshold   | event_id |  tick_price   
+----------+---------+-----------+---------------+----------+---------------
+ kavya    | ETHUSDT | BELOW     | 3000.00000000 |        4 | 2994.60000000
+(1 row)
+
+=== CQ09 | 5 tables, CTE, window LAG | By how much did the price cross the threshold for each alert, and was it a genuine crossing?
+WITH seq AS (
+    SELECT t.tick_id, t.price,
+           lag(t.price) OVER (PARTITION BY t.instrument_id
+                              ORDER BY t.observed_at, t.tick_id) AS previous_price
+    FROM price_ticks t
+)
+SELECT e.event_id, u.username, i.symbol, r.direction, round(r.threshold, 2) AS threshold,
+       round(s.previous_price, 2) AS previous_price,
+       round(s.price, 2)          AS firing_price,
+       round(abs(s.price - r.threshold), 2)                   AS overshoot,
+       round(100 * abs(s.price - r.threshold) / r.threshold, 3) AS overshoot_pct,
+       (r.direction = 'ABOVE' AND s.previous_price < r.threshold AND s.price >= r.threshold)
+    OR (r.direction = 'BELOW' AND s.previous_price > r.threshold AND s.price <= r.threshold)
+                                                              AS genuine_crossing
+FROM alert_events e
+JOIN alert_rules r ON r.rule_id = e.rule_id
+JOIN users u       ON u.user_id = r.user_id
+JOIN seq s         ON s.tick_id = e.tick_id
+JOIN instruments i ON i.instrument_id = r.instrument_id
+ORDER BY overshoot_pct DESC;
+ event_id | username |  symbol  | direction | threshold | previous_price | firing_price | overshoot | overshoot_pct | genuine_crossing 
+----------+----------+----------+-----------+-----------+----------------+--------------+-----------+---------------+------------------
+        7 | arjun    | RELIANCE | ABOVE     |   3000.00 |        2990.00 |      3021.50 |     21.50 |         0.717 | t
+        6 | arjun    | BTCUSDT  | ABOVE     | 100000.00 |       99800.00 |    100400.00 |    400.00 |         0.400 | t
+        5 | priya    | TCS      | BELOW     |   3500.00 |        3512.00 |      3490.00 |     10.00 |         0.286 | t
+        4 | kavya    | ETHUSDT  | BELOW     |   3000.00 |        3048.10 |      2994.60 |      5.40 |         0.180 | t
+        8 | arjun    | RELIANCE | BELOW     |   2800.00 |        3030.00 |      2795.00 |      5.00 |         0.179 | t
+        3 | arjun    | BTCUSDT  | ABOVE     | 100000.00 |       99880.00 |    100120.00 |    120.00 |         0.120 | t
+        1 | arjun    | RELIANCE | ABOVE     |   3000.00 |        2994.00 |      3002.40 |      2.40 |         0.080 | t
+        2 | priya    | TCS      | BELOW     |   3500.00 |        3531.25 |      3498.00 |      2.00 |         0.057 | t
+(8 rows)
+
+=== CQ10 | 5 tables, scalar subqueries | Give a per-user dashboard: watchlists, instruments watched, active rules and alerts received
+SELECT u.username,
+       (SELECT count(*) FROM watchlists w WHERE w.user_id = u.user_id) AS watchlists,
+       (SELECT count(DISTINCT wi.instrument_id)
+          FROM watchlists w JOIN watchlist_items wi ON wi.watchlist_id = w.watchlist_id
+         WHERE w.user_id = u.user_id)                                AS instruments_watched,
+       (SELECT count(*) FROM alert_rules r
+         WHERE r.user_id = u.user_id AND r.is_active)                AS active_rules,
+       (SELECT count(*)
+          FROM alert_events e JOIN alert_rules r ON r.rule_id = e.rule_id
+         WHERE r.user_id = u.user_id)                                AS alerts_received
+FROM users u
+ORDER BY u.username;
+ username | watchlists | instruments_watched | active_rules | alerts_received 
+----------+------------+---------------------+--------------+-----------------
+ arjun    |          2 |                   5 |            3 |               5
+ kavya    |          1 |                   3 |            1 |               1
+ priya    |          2 |                   3 |            1 |               2
+(3 rows)
+
+=== CQ11 | CTE, window RANK PARTITION BY | Which instrument was the biggest mover on each exchange?
+WITH moves AS (
+    SELECT i.exchange, i.symbol,
+           100 * ((array_agg(t.price ORDER BY t.observed_at DESC, t.tick_id DESC))[1]
+                  - (array_agg(t.price ORDER BY t.observed_at, t.tick_id))[1])
+               / (array_agg(t.price ORDER BY t.observed_at, t.tick_id))[1] AS change_pct
+    FROM price_ticks t
+    JOIN instruments i ON i.instrument_id = t.instrument_id
+    GROUP BY i.exchange, i.symbol
+)
+SELECT exchange, symbol, round(change_pct, 2) AS change_pct, move_rank
+FROM (SELECT m.*,
+             rank() OVER (PARTITION BY m.exchange ORDER BY abs(m.change_pct) DESC) AS move_rank
+      FROM moves m) AS x
+WHERE move_rank = 1
+ORDER BY exchange;
+ exchange |  symbol  | change_pct | move_rank 
+----------+----------+------------+-----------
+ BINANCE  | ETHUSDT  |      -1.76 |         1
+ NSE      | RELIANCE |      -6.62 |         1
+(2 rows)
+
+=== CQ12 | 5 tables, CTE, LEFT JOIN | Which watchlist performed best (equal-weighted average % change of its instruments)?
+WITH moves AS (
+    SELECT t.instrument_id,
+           100 * ((array_agg(t.price ORDER BY t.observed_at DESC, t.tick_id DESC))[1]
+                  - (array_agg(t.price ORDER BY t.observed_at, t.tick_id))[1])
+               / (array_agg(t.price ORDER BY t.observed_at, t.tick_id))[1] AS change_pct
+    FROM price_ticks t
+    GROUP BY t.instrument_id
+)
+SELECT u.username, w.name AS watchlist,
+       count(wi.instrument_id)     AS instruments,
+       count(m.change_pct)         AS instruments_with_prices,
+       round(avg(m.change_pct), 2) AS avg_change_pct
+FROM watchlists w
+JOIN users u            ON u.user_id = w.user_id
+JOIN watchlist_items wi ON wi.watchlist_id = w.watchlist_id
+LEFT JOIN moves m       ON m.instrument_id = wi.instrument_id
+GROUP BY u.username, w.name
+ORDER BY avg_change_pct DESC NULLS LAST, u.username, w.name;
+ username | watchlist | instruments | instruments_with_prices | avg_change_pct 
+----------+-----------+-------------+-------------------------+----------------
+ priya    | Tech      |           2 |                       2 |          -0.02
+ arjun    | Crypto    |           2 |                       2 |          -0.40
+ kavya    | Main      |           3 |                       3 |          -1.32
+ arjun    | Long Term |           3 |                       2 |          -4.18
+ priya    | Auto      |           1 |                       0 |         (null)
+(5 rows)
+

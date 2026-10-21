@@ -1,4 +1,4 @@
-"""Phase 9 tests for app/live_feed.py. They need NO internet access.
+"""Tests for app/live_feed.py. They need NO internet access.
 
 Binance messages are fixtures in the format of the official docs
 (binance-spot-api-docs, web-socket-streams.md, "Aggregate Trade Streams",
@@ -37,8 +37,8 @@ from app.live_feed import LiveTrade, MalformedEvent, ServerShutdown, Unsupported
 
 ROOT = Path(__file__).resolve().parent.parent
 PG_BIN = Path(os.environ.get("PG_BIN", "/opt/homebrew/opt/postgresql@18/bin"))
-TEMPLATE_DB = "stock_watchlist_p9_template"
-TEST_DB = "stock_watchlist_p9_test"
+TEMPLATE_DB = "stock_watchlist_livefeed_template"
+TEST_DB = "stock_watchlist_livefeed_test"
 BOTH = {"BTCUSDT", "ETHUSDT"}
 DOC_TIME_MS = 1672515782136                      # value used in the official example
 

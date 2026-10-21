@@ -1,0 +1,49 @@
+Run ID:    r2demo
+Run start: 2026-10-13 10:03:36 IST
+Database:  stock_watchlist_review2_sandbox
+[001] +   0s NSE     RELIANCE      2985.50 vol=1200   -> INSERTED tick=1
+[002] +   0s NSE     TCS           3552.00 vol=800    -> INSERTED tick=2
+[003] +   5s BINANCE BTCUSDT      99450.00 vol=NULL   -> INSERTED tick=3
+[004] +  10s NSE     RELIANCE      2994.00 vol=900    -> INSERTED tick=4
+[005] +  15s NSE     TCS           3531.25 vol=NULL   -> INSERTED tick=5
+[006] +  20s NSE     RELIANCE      3002.40 vol=1500   -> INSERTED tick=6
+        ALERT event=1: arjun RELIANCE ABOVE 3000
+[007] +  25s BINANCE BTCUSDT      99880.00 vol=0.52   -> INSERTED tick=7
+[008] +  30s NSE     RELIANCE      3011.00 vol=700    -> INSERTED tick=8
+[009] +  35s NSE     TCS           3498.00 vol=1100   -> INSERTED tick=9
+        ALERT event=2: priya TCS BELOW 3500
+[010] +  40s BINANCE BTCUSDT     100120.00 vol=0.31   -> INSERTED tick=10
+        ALERT event=3: arjun BTCUSDT ABOVE 100000
+[011] +  45s NSE     RELIANCE      3018.75 vol=NULL   -> INSERTED tick=11
+[012] +  50s NSE     TCS           3485.50 vol=900    -> INSERTED tick=12
+[013] +  55s BINANCE ETHUSDT       3048.10 vol=2.5    -> INSERTED tick=13
+[014] +  60s BINANCE BTCUSDT     100310.00 vol=NULL   -> INSERTED tick=14
+[015] +  70s BINANCE BTCUSDT      99920.00 vol=0.40   -> INSERTED tick=15
+[016] +  80s BINANCE BTCUSDT     100050.00 vol=0.22   -> INSERTED tick=16
+[017] +  90s NSE     RELIANCE      2979.00 vol=1300   -> INSERTED tick=17
+[018] + 110s BINANCE ETHUSDT       2994.60 vol=NULL   -> INSERTED tick=18
+        ALERT event=4: kavya ETHUSDT BELOW 3000
+[019] + 120s NSE     TCS           3512.00 vol=600    -> INSERTED tick=19
+[020] + 130s NSE     TCS           3490.00 vol=750    -> INSERTED tick=20
+        ALERT event=5: priya TCS BELOW 3500
+[021] + 150s BINANCE BTCUSDT      99800.00 vol=0.35   -> INSERTED tick=21
+[022] + 170s BINANCE BTCUSDT     100400.00 vol=0.60   -> INSERTED tick=22
+        ALERT event=6: arjun BTCUSDT ABOVE 100000
+[023] + 200s NSE     RELIANCE      3004.00 vol=1000   -> INSERTED tick=23
+[024] + 240s NSE     RELIANCE      2990.00 vol=NULL   -> INSERTED tick=24
+[025] + 300s NSE     INFY          1585.00 vol=400    -> INSERTED tick=25
+[026] + 310s NSE     INFY          1612.00 vol=450    -> INSERTED tick=26
+[027] + 400s NSE     RELIANCE      3021.50 vol=1400   -> INSERTED tick=27
+        ALERT event=7: arjun RELIANCE ABOVE 3000
+[028] + 430s NSE     RELIANCE      3030.00 vol=NULL   -> INSERTED tick=28
+[029] + 450s NSE     RELIANCE      2795.00 vol=2100   -> INSERTED tick=29
+        ALERT event=8: arjun RELIANCE BELOW 2800
+[030] + 460s NSE     RELIANCE      2788.00 vol=NULL   -> INSERTED tick=30
+
+Replay complete
+Run ID:     r2demo
+Rows:       30 (processed 30)
+Inserted:   30
+Duplicates: 0
+Errors:     0
+Alerts:     8

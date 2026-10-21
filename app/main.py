@@ -2,7 +2,7 @@
 
 Run (project root, venv active):
     uvicorn app.main:app --reload
-Web UI:           http://127.0.0.1:8000/          (app/static, Phase 8)
+Web UI:           http://127.0.0.1:8000/          (app/static)
 Interactive docs: http://127.0.0.1:8000/docs
 
 PostgreSQL remains the source of truth. This layer only:
@@ -211,7 +211,7 @@ WATCHLIST_ITEMS_QUERY = sql.SQL("""
     FROM watchlists w
     LEFT JOIN watchlist_items wi ON wi.watchlist_id = w.watchlist_id
     LEFT JOIN instruments i      ON i.instrument_id = wi.instrument_id
-    LEFT JOIN LATERAL (                       -- latest tick, via the Phase 6 index
+    LEFT JOIN LATERAL (                       -- latest tick, via ix_price_ticks_instrument_time
         SELECT t.price, t.observed_at
         FROM price_ticks t
         WHERE t.instrument_id = wi.instrument_id
@@ -345,7 +345,7 @@ def update_alert_rule(rule_id: Id, body: schemas.AlertRulePatch, conn: Conn):
             tags=["alert rules"])
 def delete_alert_rule(rule_id: Id, conn: Conn):
     """Deletes the rule AND its alert history: alert_events.rule_id is
-    ON DELETE CASCADE (approved ownership policy). Price ticks are kept.
+    ON DELETE CASCADE (user-owned data). Price ticks are kept.
     To keep history, disable the rule instead (PATCH is_active=false)."""
     with conn.transaction():
         deleted = conn.execute("DELETE FROM alert_rules WHERE rule_id = %s RETURNING 1",

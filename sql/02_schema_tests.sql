@@ -1,25 +1,3 @@
--- =====================================================================
--- 02_schema_tests.sql
--- Executable tests for the base schema constraints.
---
--- Prerequisite: 00_schema.sql and 01_seed.sql have been run.
--- Run:  psql -d stock_watchlist -v ON_ERROR_STOP=1 -f sql/02_schema_tests.sql
---
--- Everything runs inside one transaction that is ROLLED BACK at the end,
--- so the seed data is unchanged afterwards.
---
--- A negative test PASSES only if PostgreSQL raises the expected SQLSTATE
--- from the expected named constraint:
---   23505 unique_violation       23514 check_violation
---   23503 foreign_key_violation  23001 restrict_violation
--- Each attempt runs in its own subtransaction (plpgsql EXCEPTION block),
--- so one expected error does not abort the rest of the script.
---
--- NOTE: price_ticks / alert_events rows are inserted directly here only to
--- test constraints. Operational ingestion will go through ingest_tick
--- (Phase 4).
--- =====================================================================
-
 \set QUIET on
 \pset footer off
 BEGIN;
@@ -106,7 +84,7 @@ VALUES (pg_temp.iid('NSE', 'RELIANCE'), '2026-09-25 10:00:00+05:30', 2990.00, 10
        (pg_temp.iid('NSE', 'TCS'),      '2026-09-25 10:00:00+05:30', 3600.00, NULL, 'REPLAY', 'test:000003');
 
 -- arjun's "RELIANCE ABOVE 3000" rule fired on the 3005 tick.
--- Since Phase 4 the alert trigger already creates this event when the
+-- The alert trigger already creates this event when the
 -- ticks above are inserted; ON CONFLICT keeps the fixture valid with or
 -- without the trigger.
 INSERT INTO alert_events (rule_id, tick_id)

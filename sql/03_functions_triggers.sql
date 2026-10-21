@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 03_functions_triggers.sql
--- Phase 4: ingestion function + alert engine (database logic only).
+-- Ingestion function + alert engine (database logic only).
 --
 --   ingest_tick(...)                      official ingestion path
 --   evaluate_price_alerts()               trigger fn: edge-triggered alerts

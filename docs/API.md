@@ -1,4 +1,4 @@
-# API (Phase 7) — developer / study notes
+# API
 
 FastAPI backend: `app/main.py`. All data rules live in PostgreSQL; the API
 runs parameterized SQL and translates database errors into HTTP responses.
@@ -17,7 +17,7 @@ pip install -r requirements.txt        # first time only
 uvicorn app.main:app --reload          # http://127.0.0.1:8000
 ```
 
-- **Web UI (Phase 8):** http://127.0.0.1:8000/ (plain HTML/CSS/JS from
+- **Web UI:** http://127.0.0.1:8000/ (plain HTML/CSS/JS from
   app/static; see docs/FRONTEND.md). It is not part of the OpenAPI spec.
 - **Swagger UI:** http://127.0.0.1:8000/docs. It loads its JavaScript and
   CSS from `cdn.jsdelivr.net`, so the browser needs internet access.
@@ -59,7 +59,7 @@ uvicorn app.main:app --reload          # http://127.0.0.1:8000
 | GET | /users/{user_id} | 200 | 404 | |
 | GET | /instruments | 200 list | 422 | query: `exchange`, `active_only=true` |
 | GET | /instruments/{instrument_id} | 200 | 404 | |
-| GET | /instruments/{instrument_id}/latest | 200 tick | 404 instrument / 404 "no price ticks yet" | `ORDER BY observed_at DESC, tick_id DESC LIMIT 1` (Phase 6 index) |
+| GET | /instruments/{instrument_id}/latest | 200 tick | 404 instrument / 404 "no price ticks yet" | `ORDER BY observed_at DESC, tick_id DESC LIMIT 1` (ix_price_ticks_instrument_time) |
 | GET | /instruments/{instrument_id}/history | 200 list | 404, 422 | `limit` 1–1000 (default 100), `from_time`, `to_time` (half-open [from, to)); returns the **most recent** `limit` ticks, listed **oldest → newest** |
 | GET | /users/{user_id}/watchlists | 200 list | 404 | each list with items + each item's latest price; ONE query (LEFT JOIN + LATERAL) |
 | POST | /users/{user_id}/watchlists | 201 | 404 user, 409 `uq_watchlists_user_name`, 422 | body `{"name": "My Stocks"}` (1–50 chars, trimmed) |
