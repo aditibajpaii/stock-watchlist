@@ -1,9 +1,11 @@
-# Phase 1 Specification — APPROVED
+# Schema Design
 
 Real-Time Stock Market Watchlist & Alert System — BCSE302P.
-This is the approved database design. The live schema
-(`sql/00_schema.sql`) implements sections A–E. Sections I–J describe
-Phase 4 work that has not been built yet.
+Database design for the project. Tables and constraints (sections A–E)
+are in `sql/00_schema.sql`; the ingestion function and alert trigger
+(sections I–J) are in `sql/03_functions_triggers.sql`.
+
+Corrected on 2026-10-13 (Review 2); each change and the replaced text are listed in docs/review2/OLDER_DOCS_CORRECTIONS.md.
 
 All columns are NOT NULL unless marked **NULL**.
 "identity" = `BIGINT GENERATED ALWAYS AS IDENTITY`.
@@ -43,7 +45,7 @@ All columns are NOT NULL unless marked **NULL**.
 - CHECK `ck_instruments_name_not_blank`: `btrim(name) <> ''`
 - CHECK `ck_instruments_quote_currency`: `^[A-Z]{3,5}$`
 - Candidate keys: {instrument_id}, {exchange, symbol}
-- No asset_class column (exchange → asset_class would violate 3NF)
+- No asset_class column (not needed; if exchange → asset_class held, it would violate **2NF** as a partial dependency on (exchange, symbol))
 
 ### watchlists
 | Column | Type | Default |
@@ -130,6 +132,7 @@ All columns are NOT NULL unless marked **NULL**.
 - UNIQUE `uq_alert_events_rule_tick` (rule_id, tick_id)
 - Candidate keys: {event_id}, {rule_id, tick_id}
 - Does not store instrument_id, observed_at or price
+- fired_at is the time the event row was recorded (`DEFAULT now()`)
 
 ## D. ON DELETE
 
@@ -149,9 +152,10 @@ All columns are NOT NULL unless marked **NULL**.
 - price_ticks is historical and append-only as a design rule. No app
   endpoint edits or deletes ticks, and no trigger enforces this for now.
 
-## E. ER diagram (approved design)
+## E. Relational schema sketch (Crow's Foot)
 
 See `docs/ER_DIAGRAM.md` for the version verified against the live catalog.
+The conceptual ER diagram (Chen notation) is docs/review2/ER_CORRECTED.png.
 
 ```mermaid
 erDiagram
@@ -175,11 +179,12 @@ erDiagram
 | watchlist_items | (watchlist_id, instrument_id) → added_at | BCNF |
 | price_ticks | tick_id → *; (source, instrument_id, source_event_id) → * | BCNF |
 | alert_rules | rule_id → *; (user_id, instrument_id, direction, threshold) → * | BCNF |
-| alert_events | event_id → *; (rule_id, tick_id) → * | BCNF |
+| alert_events | event_id → *; (rule_id, tick_id) → * (fired_at = time the event row was recorded; equal to the tick's ingested_at on the application path, which is not an FD: docs/review2/NORMALIZATION_PROOF.md §9) | BCNF |
 
 Checked and rejected:
 - exchange → quote_currency is false.
-- exchange → asset_class is true, so the column was removed.
+- exchange → asset_class is not a valid FD in general (NSE lists equities
+  and ETFs); asset_class is simply not part of the design.
 - (source, source_event_id) → instrument_id is false.
 - tick_id → price/observed_at/instrument_id never appears inside
   alert_events.
@@ -209,7 +214,7 @@ Checked and rejected:
 - Late ticks are stored but not evaluated, and never become the "previous"
   tick of a later tick.
 
-## I. ingest_tick (conceptual, Phase 4)
+## I. ingest_tick (outline)
 
 ```
 ingest_tick(p_exchange, p_symbol, p_observed_at, p_price, p_volume,
@@ -238,7 +243,7 @@ ingest_tick(p_exchange, p_symbol, p_observed_at, p_price, p_volume,
   Benchmark bulk loads run with alert processing disabled, or in an
   isolated setup.
 
-## J. Alert trigger (conceptual, Phase 4) — AFTER INSERT FOR EACH ROW on price_ticks
+## J. Alert trigger (outline) — AFTER INSERT FOR EACH ROW on price_ticks
 
 ```
 1. If late (H) → RETURN.
@@ -257,21 +262,23 @@ ingest_tick(p_exchange, p_symbol, p_observed_at, p_price, p_volume,
 ```
 
 - Rollback removes the tick, the events and the notification together.
-- **Integrity check (approved addition):** a BEFORE INSERT trigger on
-  alert_events rejects the insert unless
-  `alert_rules.instrument_id = price_ticks.instrument_id` for the supplied
-  rule_id and tick_id. instrument_id is not added to alert_events.
-- Phase 4 test: a rule on instrument A cannot produce an event from a
+- **Integrity check:** trigger `trg_alert_events_check_instrument`
+  (BEFORE INSERT OR UPDATE OF rule_id, tick_id on alert_events) rejects the
+  row unless `alert_rules.instrument_id = price_ticks.instrument_id` for the
+  supplied rule_id and tick_id. instrument_id is not added to alert_events.
+- Scope: later instrument_id changes on alert_rules or price_ticks are not
+  checked (docs/review2/sql_output/22_integrity_scope.out). No application
+  path makes them. A fix is proposed, not applied:
+  docs/review2/PROPOSED_INTEGRITY_FIX.md.
+- Tested: a rule on instrument A cannot produce an event from a
   tick on instrument B.
 
 ## Indexes
 
-- (Final state: this is still the only extra index; built in Phase 6.)
-- The only intended index committed so far is
-  `price_ticks (instrument_id, observed_at DESC, tick_id DESC)`, created
-  in Phase 6.
-- PK/UNIQUE constraints already create indexes. Further indexes will be
-  designed from real queries and EXPLAIN output.
+- The only extra index is
+  `price_ticks (instrument_id, observed_at DESC, tick_id DESC)`
+  (`sql/06_indexes.sql`), chosen from real queries and EXPLAIN output.
+- PK/UNIQUE constraints already create indexes.
 
 ## K. Assumptions
 
