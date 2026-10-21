@@ -1,5 +1,10 @@
 # Evidence Checklist
 
+> **Review 2 (Windows):** 113 real psql console screenshots covering every
+> section of "Project Template - review 2.docx" are produced by
+> `scripts/take_screenshots.ps1` into `docs/screenshots/`. Which image
+> goes in which template section: `sql/screenshots/README.md`.
+
 Screenshots for the official report. Take them in a terminal with a
 readable font and a window wide enough that psql output does not wrap.
 **Start with the FINAL MUST-HAVE list below.** Everything after it is
